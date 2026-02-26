@@ -32,6 +32,7 @@ class BodyController:
         self.mp_draw = mp.solutions.drawing_utils
 
         self.baseline_shoulder_y = None
+        self.baseline_torso_x = None
         self.last_jump_time = 0.0
 
     def update(self) -> tuple[ControlState, pygame.Surface | None]:
@@ -79,12 +80,23 @@ class BodyController:
                 hip_mid_x = (left_hip.x + right_hip.x) * 0.5
                 torso_mid_x = (shoulder_mid_x + hip_mid_x) * 0.5
 
-                if torso_mid_x < 0.42:
+                if self.baseline_torso_x is None:
+                    self.baseline_torso_x = torso_mid_x
+
+                shoulder_width = abs(right_shoulder.x - left_shoulder.x)
+                lean_threshold = max(0.035, shoulder_width * 0.28)
+                torso_delta = torso_mid_x - self.baseline_torso_x
+                if torso_delta < -lean_threshold:
                     state.lane = 0
-                elif torso_mid_x > 0.58:
+                elif torso_delta > lean_threshold:
                     state.lane = 2
                 else:
                     state.lane = 1
+
+                if abs(torso_delta) < (lean_threshold * 0.6):
+                    self.baseline_torso_x = (
+                        self.baseline_torso_x * 0.94
+                    ) + (torso_mid_x * 0.06)
 
                 jump_pose = (
                     left_wrist.y < (left_shoulder.y - 0.04)
