@@ -18,8 +18,8 @@ MODES: dict[str, ModeConfig] = {
     "kids": ModeConfig(
         key="kids",
         label="Kids Mode",
-        speed=13.0,
-        obstacle_spawn_rate=0.95,
+        speed=11.6,
+        obstacle_spawn_rate=1.02,
         control_type="pose",
         movement_sensitivity=1.18,
         gesture_profile="kids",
@@ -29,8 +29,8 @@ MODES: dict[str, ModeConfig] = {
     "elderly": ModeConfig(
         key="elderly",
         label="Elderly Mode",
-        speed=8.2,
-        obstacle_spawn_rate=1.85,
+        speed=7.0,
+        obstacle_spawn_rate=2.05,
         control_type="pose",
         movement_sensitivity=0.72,
         gesture_profile="elderly",
@@ -40,8 +40,8 @@ MODES: dict[str, ModeConfig] = {
     "disabled_leg": ModeConfig(
         key="disabled_leg",
         label="Disabled Leg Mode",
-        speed=10.7,
-        obstacle_spawn_rate=1.35,
+        speed=9.3,
+        obstacle_spawn_rate=1.46,
         control_type="hand",
         movement_sensitivity=1.0,
         gesture_profile="disabled_leg",
@@ -51,10 +51,10 @@ MODES: dict[str, ModeConfig] = {
     "disabled_hand": ModeConfig(
         key="disabled_hand",
         label="Disabled Hand Mode",
-        speed=10.0,
-        obstacle_spawn_rate=1.45,
+        speed=8.7,
+        obstacle_spawn_rate=1.58,
         control_type="pose",
-        movement_sensitivity=0.95,
+        movement_sensitivity=1.10,
         gesture_profile="disabled_hand",
         jump_cooldown=0.55,
         lane_smoothing=0.22,
@@ -67,4 +67,3 @@ DEFAULT_MODE_KEY = "kids"
 
 def get_mode_config(mode_key: str) -> ModeConfig:
     return MODES.get(mode_key, MODES[DEFAULT_MODE_KEY])
-

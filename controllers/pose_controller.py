@@ -41,6 +41,9 @@ class PoseController(BaseController):
         self.smoothed_lane = 1.0
         self.elderly_jump_hold_frames = 0
         self.duck_filter = 0.0
+        self.disabled_hand_jump_hold_frames = 0
+        self.disabled_hand_jump_armed = True
+        self.disabled_hand_duck_filter = 0.0
 
         self._handlers = {
             "kids": self._handle_kids_profile,
@@ -59,7 +62,6 @@ class PoseController(BaseController):
         ]
         self._elderly_required = self._kids_required
         self._disabled_hand_required = [
-            self.pose_landmark.NOSE.value,
             self.pose_landmark.LEFT_SHOULDER.value,
             self.pose_landmark.RIGHT_SHOULDER.value,
             self.pose_landmark.LEFT_HIP.value,
@@ -351,43 +353,80 @@ class PoseController(BaseController):
         )
 
     def _handle_disabled_hand_profile(self, landmarks) -> MovementState:
-        if not self._visibility_ok(landmarks, self._disabled_hand_required):
-            return MovementState(message="Disabled Hand Mode: keep shoulders and hips visible.")
-
         left_shoulder = landmarks[self.pose_landmark.LEFT_SHOULDER.value]
         right_shoulder = landmarks[self.pose_landmark.RIGHT_SHOULDER.value]
+        left_hip = landmarks[self.pose_landmark.LEFT_HIP.value]
+        right_hip = landmarks[self.pose_landmark.RIGHT_HIP.value]
+
+        shoulders_visible = left_shoulder.visibility > 0.30 and right_shoulder.visibility > 0.30
+        hips_visible = left_hip.visibility > 0.18 and right_hip.visibility > 0.18
+        if not shoulders_visible:
+            self.disabled_hand_jump_hold_frames = 0
+            return MovementState(message="Disabled Hand Mode: keep shoulders visible to control movement.")
 
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
+        shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
         shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
-        shoulder_width = abs(right_shoulder.x - left_shoulder.x)
+        if hips_visible:
+            hip_mid_x = (left_hip.x + right_hip.x) * 0.5
+            torso_mid_x = (shoulder_mid_x + hip_mid_x) * 0.5
+        else:
+            torso_mid_x = shoulder_mid_x
+        shoulder_width = max(0.08, abs(right_shoulder.x - left_shoulder.x))
         tilt = left_shoulder.y - right_shoulder.y
 
+        if self.baseline_torso_x is None:
+            self.baseline_torso_x = torso_mid_x
         if self.baseline_shoulder_y is None:
             self.baseline_shoulder_y = shoulder_mid_y
 
-        # No wrist landmarks: lane selection is driven only by shoulder tilt.
-        tilt_threshold = max(0.012, shoulder_width * (0.09 / sensitivity))
+        # No wrist landmarks: combine shoulder tilt + torso lean for lane selection.
+        tilt_norm = tilt / shoulder_width
+        torso_lean = torso_mid_x - self.baseline_torso_x
+        lateral_signal = torso_lean - (tilt_norm * 0.08)
+        lateral_threshold = 0.030 / sensitivity
         target_lane = 1
-        if tilt > tilt_threshold:
+        if lateral_signal < -lateral_threshold:
             target_lane = 0
-        elif tilt < -tilt_threshold:
+        elif lateral_signal > lateral_threshold:
             target_lane = 2
-        lane = self._smooth_lane(target_lane, smoothing=max(0.2, self.mode_config.lane_smoothing))
+        lane = self._smooth_lane(target_lane, smoothing=max(0.24, self.mode_config.lane_smoothing))
 
         # Vertical shoulder baseline movement maps to jump (up) and duck (down).
         upward_shift = self.baseline_shoulder_y - shoulder_mid_y
         downward_shift = shoulder_mid_y - self.baseline_shoulder_y
-        jump_pose = upward_shift > (0.024 / sensitivity)
-        duck_pose = downward_shift > (0.036 / sensitivity)
+        jump_threshold = 0.040 / sensitivity
+        jump_release_threshold = jump_threshold * 0.45
+        duck_threshold = 0.052 / sensitivity
 
-        jump = jump_pose and self._trigger_jump()
-        if not duck_pose and abs(upward_shift) < 0.015:
-            self.baseline_shoulder_y = (self.baseline_shoulder_y * 0.96) + (shoulder_mid_y * 0.04)
+        jump_pose = upward_shift > jump_threshold
+        if jump_pose and self.disabled_hand_jump_armed:
+            self.disabled_hand_jump_hold_frames += 1
+        elif not jump_pose:
+            self.disabled_hand_jump_hold_frames = 0
+
+        jump = False
+        if self.disabled_hand_jump_hold_frames >= 3 and self._trigger_jump():
+            jump = True
+            self.disabled_hand_jump_armed = False
+            self.disabled_hand_jump_hold_frames = 0
+
+        if upward_shift < jump_release_threshold:
+            self.disabled_hand_jump_armed = True
+
+        duck_pose = downward_shift > duck_threshold
+        self.disabled_hand_duck_filter = (self.disabled_hand_duck_filter * 0.80) + (0.20 if duck_pose else 0.0)
+        duck = self.disabled_hand_duck_filter > 0.50
+
+        neutral_window = abs(upward_shift) < (jump_threshold * 0.55) and downward_shift < (duck_threshold * 0.55)
+        if neutral_window:
+            self.baseline_shoulder_y = (self.baseline_shoulder_y * 0.95) + (shoulder_mid_y * 0.05)
+            self.baseline_torso_x = (self.baseline_torso_x * 0.94) + (torso_mid_x * 0.06)
 
         return MovementState(
             lane=lane,
             jump=jump,
-            duck=duck_pose,
+            duck=duck,
             tracked=True,
-            message="Disabled Hand Mode: shoulder tilt to move, rise body to jump, small squat to duck.",
+            message="Disabled Hand Mode: lean torso/tilt shoulders to move, rise body to jump, small squat to duck.",
         )

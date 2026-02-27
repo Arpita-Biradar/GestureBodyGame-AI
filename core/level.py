@@ -60,27 +60,65 @@ class Obstacle:
         sx, sy, scale = proj_ground
 
         if self.kind == "jump":
-            width = max(12, int(scale * 0.70))
-            height = max(10, int(scale * 0.35))
+            width = max(20, int(scale * 0.92))
+            height = max(16, int(scale * 0.46))
             rect = pygame.Rect(int(sx - (width * 0.5)), int(sy - height), width, height)
-            pygame.draw.rect(screen, (237, 121, 72), rect, border_radius=8)
-            pygame.draw.rect(screen, (255, 226, 188), rect, 2, border_radius=8)
+
+            glow = pygame.Surface((rect.width + 24, rect.height + 24), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (255, 114, 82, 80), glow.get_rect(), border_radius=10, width=3)
+            screen.blit(glow, (rect.x - 12, rect.y - 12))
+
+            pygame.draw.rect(screen, (250, 122, 84), rect, border_radius=9)
+            pygame.draw.rect(screen, (255, 232, 182), rect, 2, border_radius=9)
             pygame.draw.rect(
                 screen,
-                (194, 86, 48),
-                pygame.Rect(rect.x + 3, rect.bottom - max(6, height // 3), rect.width - 6, max(3, height // 5)),
+                (210, 78, 48),
+                pygame.Rect(rect.x + 3, rect.bottom - max(8, height // 3), rect.width - 6, max(4, height // 5)),
                 border_radius=4,
             )
+            self._draw_marker(screen, int(sx), rect.y - max(9, int(scale * 0.18)), (255, 146, 94), scale)
         else:
-            bar_y = project_world(x_world, 1.05, self.z)
+            bar_y = project_world(x_world, 1.03, self.z)
             if bar_y is None:
                 return
             _, bar_sy, _ = bar_y
-            width = max(22, int(scale * 0.95))
-            height = max(7, int(scale * 0.13))
+            width = max(28, int(scale * 1.08))
+            height = max(10, int(scale * 0.18))
             rect = pygame.Rect(int(sx - (width * 0.5)), int(bar_sy - (height * 0.5)), width, height)
-            pygame.draw.rect(screen, (83, 158, 246), rect, border_radius=6)
-            pygame.draw.rect(screen, (228, 245, 255), rect, 2, border_radius=6)
+
+            glow = pygame.Surface((rect.width + 28, rect.height + 28), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (96, 228, 255, 92), glow.get_rect(), border_radius=10, width=3)
+            screen.blit(glow, (rect.x - 14, rect.y - 14))
+
+            pygame.draw.rect(screen, (92, 196, 255), rect, border_radius=6)
+            pygame.draw.rect(screen, (224, 246, 255), rect, 2, border_radius=6)
+
+            # Side posts make overhead bars easier to read at a glance.
+            post_h = max(12, int(scale * 0.40))
+            post_w = max(3, int(scale * 0.06))
+            left_post = pygame.Rect(rect.left + 2, rect.bottom - 2, post_w, post_h)
+            right_post = pygame.Rect(rect.right - post_w - 2, rect.bottom - 2, post_w, post_h)
+            pygame.draw.rect(screen, (78, 162, 236), left_post, border_radius=3)
+            pygame.draw.rect(screen, (78, 162, 236), right_post, border_radius=3)
+            pygame.draw.rect(screen, (198, 236, 255), left_post, 1, border_radius=3)
+            pygame.draw.rect(screen, (198, 236, 255), right_post, 1, border_radius=3)
+            self._draw_marker(screen, int(sx), rect.y - max(10, int(scale * 0.22)), (120, 236, 255), scale)
+
+    @staticmethod
+    def _draw_marker(
+        screen: pygame.Surface,
+        x: int,
+        y: int,
+        color: tuple[int, int, int],
+        scale: float,
+    ) -> None:
+        marker_size = max(4, int(scale * 0.10))
+        glow = pygame.Surface((marker_size * 6, marker_size * 6), pygame.SRCALPHA)
+        c = glow.get_width() // 2
+        pygame.draw.circle(glow, (color[0], color[1], color[2], 88), (c, c), int(marker_size * 1.6))
+        pygame.draw.circle(glow, (color[0], color[1], color[2], 48), (c, c), int(marker_size * 2.3))
+        screen.blit(glow, (x - c, y - c))
+        pygame.draw.circle(screen, color, (x, y), marker_size)
 
 
 @dataclass
@@ -155,7 +193,8 @@ class Level:
         jump_bias = 0.65 if self.mode_config.gesture_profile == "kids" else 0.55
         kind = "jump" if random.random() < jump_bias else "duck"
         lane = random.randint(0, 2)
-        spawn_z = random.uniform(41.0, 56.0)
+        # Spawn slightly farther so obstacle silhouettes are readable before reaction window.
+        spawn_z = random.uniform(45.0, 62.0)
         self.obstacles.append(Obstacle(lane, kind, spawn_z))
 
     def _spawn_coin(self) -> None:
@@ -221,27 +260,48 @@ class Level:
             if y < HORIZON_Y:
                 k = y / max(1, HORIZON_Y)
                 color = (
-                    int(28 + (110 * k)),
-                    int(94 + (120 * k)),
-                    int(198 + (45 * k)),
+                    int(8 + (22 * k)),
+                    int(10 + (18 * k)),
+                    int(30 + (56 * k)),
                 )
             else:
                 k = (y - HORIZON_Y) / max(1, HEIGHT - HORIZON_Y)
                 color = (
-                    int(174 - (110 * k)),
-                    int(208 - (128 * k)),
-                    int(238 - (140 * k)),
+                    int(14 + (6 * k)),
+                    int(18 + (12 * k)),
+                    int(38 + (10 * k)),
                 )
             pygame.draw.line(surface, color, (0, y), (WIDTH, y))
 
-        for cx, cy, r in ((170, 92, 52), (410, 72, 45), (830, 84, 58), (1060, 70, 42)):
-            pygame.draw.circle(surface, (255, 255, 255), (cx, cy), r)
-            pygame.draw.circle(surface, (255, 255, 255), (cx + (r // 2), cy + 8), int(r * 0.66))
-            pygame.draw.circle(surface, (255, 255, 255), (cx - (r // 2), cy + 12), int(r * 0.62))
+        # Distant skyline blocks with subtle neon windows.
+        for idx in range(28):
+            block_w = 30 + ((idx * 17) % 76)
+            x = (idx * 47) % WIDTH
+            h = 62 + ((idx * 23) % 130)
+            y = HORIZON_Y - h + 26
+            body = pygame.Rect(x, y, block_w, h)
+            pygame.draw.rect(surface, (12, 18, 34), body, border_radius=4)
+            pygame.draw.rect(surface, (20, 34, 60), body, 1, border_radius=4)
+            for row in range(3, h - 6, 12):
+                for col in range(4, block_w - 6, 10):
+                    if (row + col + idx) % 3 == 0:
+                        continue
+                    win_color = (78, 234, 255) if (row + idx) % 2 == 0 else (154, 104, 255)
+                    pygame.draw.rect(surface, win_color, pygame.Rect(x + col, y + row, 4, 6), border_radius=1)
 
-        haze = pygame.Surface((WIDTH, 90), pygame.SRCALPHA)
-        haze.fill((230, 244, 255, 82))
-        surface.blit(haze, (0, HORIZON_Y - 6))
+        star_layer = pygame.Surface((WIDTH, HORIZON_Y + 30), pygame.SRCALPHA)
+        for i in range(120):
+            sx = (i * 97) % WIDTH
+            sy = (i * 53) % max(1, HORIZON_Y - 8)
+            twinkle = 140 + ((i * 37) % 96)
+            star_layer.set_at((sx, sy), (186, 218, 255, twinkle))
+        surface.blit(star_layer, (0, 0))
+
+        haze = pygame.Surface((WIDTH, 170), pygame.SRCALPHA)
+        for i in range(170):
+            alpha = max(0, 112 - (i // 2))
+            pygame.draw.line(haze, (58, 88, 140, alpha), (0, i), (WIDTH, i))
+        surface.blit(haze, (0, HORIZON_Y - 34))
         return surface
 
     def draw_road(self, screen: pygame.Surface) -> None:
@@ -337,17 +397,17 @@ class Level:
             (int(lf_x), int(lf_y)),
         ]
 
-        pygame.draw.polygon(screen, (192, 141, 96), dirt_left)
-        pygame.draw.polygon(screen, (192, 141, 96), dirt_right)
-        pygame.draw.polygon(screen, (144, 112, 80), shoulder_left)
-        pygame.draw.polygon(screen, (144, 112, 80), shoulder_right)
-        pygame.draw.polygon(screen, (38, 46, 68), road_left_side)
-        pygame.draw.polygon(screen, (38, 46, 68), road_right_side)
-        pygame.draw.polygon(screen, (67, 76, 102), road_poly)
-        pygame.draw.polygon(screen, (37, 45, 67), road_poly, 3)
+        pygame.draw.polygon(screen, (16, 18, 30), dirt_left)
+        pygame.draw.polygon(screen, (16, 18, 30), dirt_right)
+        pygame.draw.polygon(screen, (18, 26, 42), shoulder_left)
+        pygame.draw.polygon(screen, (18, 26, 42), shoulder_right)
+        pygame.draw.polygon(screen, (20, 24, 36), road_left_side)
+        pygame.draw.polygon(screen, (20, 24, 36), road_right_side)
+        pygame.draw.polygon(screen, (27, 34, 56), road_poly)
+        pygame.draw.polygon(screen, (80, 238, 255), road_poly, 1)
 
-        pygame.draw.line(screen, (235, 214, 180), (int(ln_x), int(ln_y)), (int(lf_x), int(lf_y)), 4)
-        pygame.draw.line(screen, (235, 214, 180), (int(rn_x), int(rn_y)), (int(rf_x), int(rf_y)), 4)
+        pygame.draw.line(screen, (102, 250, 255), (int(ln_x), int(ln_y)), (int(lf_x), int(lf_y)), 3)
+        pygame.draw.line(screen, (102, 250, 255), (int(rn_x), int(rn_y)), (int(rf_x), int(rf_y)), 3)
 
         center_strip_near_left = project_world(-0.25, 0.0, near_z)
         center_strip_near_right = project_world(0.25, 0.0, near_z)
@@ -365,7 +425,7 @@ class Level:
                 (int(center_strip_far_right[0]), int(center_strip_far_right[1])),
                 (int(center_strip_far_left[0]), int(center_strip_far_left[1])),
             ]
-            pygame.draw.polygon(screen, (74, 85, 112), strip_poly)
+            pygame.draw.polygon(screen, (36, 48, 82), strip_poly)
 
         dash_spacing = 2.3
         dash_len = 1.1
@@ -386,7 +446,7 @@ class Level:
                         (int(x1 + width1), int(y1)),
                         (int(x1 - width1), int(y1)),
                     ]
-                    pygame.draw.polygon(screen, (244, 244, 229), poly)
+                    pygame.draw.polygon(screen, (190, 228, 255), poly)
                 z += dash_spacing
 
         rail_spacing = 3.2
@@ -402,29 +462,11 @@ class Level:
                 post_top = project_world(x, 0.72, z)
                 if post_base is not None and post_mid is not None and post_top is not None:
                     post_w = max(1, int(post_base[2] * 0.0048))
-                    pygame.draw.line(
-                        screen,
-                        (196, 202, 216),
-                        (int(post_base[0]), int(post_base[1])),
-                        (int(post_top[0]), int(post_top[1])),
-                        post_w,
-                    )
+                    pygame.draw.line(screen, (118, 246, 255), (int(post_base[0]), int(post_base[1])), (int(post_top[0]), int(post_top[1])), post_w)
                     if prev_top is not None and prev_mid is not None:
                         rail_w = max(1, int(((post_top[2] + prev_top[2]) * 0.5) * 0.0036))
-                        pygame.draw.line(
-                            screen,
-                            (214, 222, 236),
-                            (int(prev_top[0]), int(prev_top[1])),
-                            (int(post_top[0]), int(post_top[1])),
-                            rail_w,
-                        )
-                        pygame.draw.line(
-                            screen,
-                            (184, 192, 208),
-                            (int(prev_mid[0]), int(prev_mid[1])),
-                            (int(post_mid[0]), int(post_mid[1])),
-                            rail_w,
-                        )
+                        pygame.draw.line(screen, (176, 128, 255), (int(prev_top[0]), int(prev_top[1])), (int(post_top[0]), int(post_top[1])), rail_w)
+                        pygame.draw.line(screen, (98, 228, 255), (int(prev_mid[0]), int(prev_mid[1])), (int(post_mid[0]), int(post_mid[1])), rail_w)
                     prev_top = post_top
                     prev_mid = post_mid
                 z += rail_spacing
@@ -441,7 +483,7 @@ class Level:
         while z < far_z:
             items.append((z, idx, "building"))
             if idx % 2 == 0:
-                items.append((z + 1.4, idx, "tree"))
+                items.append((z + 1.4, idx, "street_light"))
             z += spacing
             idx += 1
 
@@ -452,7 +494,7 @@ class Level:
                 if kind == "building":
                     self._draw_building(screen, x, z, idx)
                 else:
-                    self._draw_tree(screen, x, z)
+                    self._draw_street_light(screen, x, z, idx)
 
     def _draw_building(self, screen: pygame.Surface, x: float, z: float, idx: int) -> None:
         half_w = 0.42 + ((idx % 3) * 0.08)
@@ -491,25 +533,25 @@ class Level:
             side_face = [pt(flb), pt(blb), pt(blt), pt(flt)]
 
         base_color = (
-            154 + ((idx % 4) * 8),
-            112 + ((idx % 3) * 7),
-            93 + ((idx % 2) * 10),
+            24 + ((idx % 4) * 10),
+            36 + ((idx % 3) * 12),
+            62 + ((idx % 2) * 16),
         )
         side_color = (
-            max(0, base_color[0] - 28),
-            max(0, base_color[1] - 28),
-            max(0, base_color[2] - 24),
+            max(0, base_color[0] - 18),
+            max(0, base_color[1] - 16),
+            max(0, base_color[2] - 10),
         )
         roof_color = (
-            min(255, base_color[0] + 20),
-            min(255, base_color[1] + 18),
-            min(255, base_color[2] + 16),
+            min(255, base_color[0] + 22),
+            min(255, base_color[1] + 24),
+            min(255, base_color[2] + 34),
         )
 
         pygame.draw.polygon(screen, roof_color, roof_face)
         pygame.draw.polygon(screen, side_color, side_face)
         pygame.draw.polygon(screen, base_color, front_face)
-        pygame.draw.polygon(screen, (205, 170, 146), front_face, 1)
+        pygame.draw.polygon(screen, (110, 220, 255), front_face, 1)
 
         front_min_x = int(min(flb[0], frb[0], flt[0], frt[0]))
         front_max_x = int(max(flb[0], frb[0], flt[0], frt[0]))
@@ -526,12 +568,13 @@ class Level:
                     wy = front_top + int((r / 8) * face_h)
                     if wy + win_h >= front_bottom - 2:
                         continue
-                    pygame.draw.rect(screen, (214, 233, 252), pygame.Rect(wx, wy, win_w, win_h), border_radius=2)
+                    win_color = (126, 242, 255) if (r + c + idx) % 2 == 0 else (178, 118, 255)
+                    pygame.draw.rect(screen, win_color, pygame.Rect(wx, wy, win_w, win_h), border_radius=2)
 
-    def _draw_tree(self, screen: pygame.Surface, x: float, z: float) -> None:
-        trunk_w = 0.1
-        trunk_h = 0.82
-        trunk_depth = 0.32
+    def _draw_street_light(self, screen: pygame.Surface, x: float, z: float, idx: int) -> None:
+        trunk_w = 0.08
+        trunk_h = 1.18
+        trunk_depth = 0.20
 
         tflb = project_world(x - trunk_w, 0.0, z)
         tfrb = project_world(x + trunk_w, 0.0, z)
@@ -562,25 +605,18 @@ class Level:
             trunk_side = [pt(tfrb), pt(tbrb), pt(tbrt), pt(tfrt)]
         else:
             trunk_side = [pt(tflb), pt(tblb), pt(tblt), pt(tflt)]
-        pygame.draw.polygon(screen, (88, 62, 47), trunk_side)
-        pygame.draw.polygon(screen, (124, 86, 58), trunk_front)
+        pygame.draw.polygon(screen, (38, 46, 66), trunk_side)
+        pygame.draw.polygon(screen, (56, 66, 94), trunk_front)
 
-        crown_back = project_world(x + 0.04, 1.16, z + 0.32)
-        crown_front = project_world(x - 0.02, 1.2, z + 0.08)
-        crown_top = project_world(x, 1.46, z + 0.12)
-        if crown_back is None or crown_front is None or crown_top is None:
+        lamp = project_world(x, 1.16, z + 0.06)
+        if lamp is None:
             return
 
-        back_radius = max(4, int(crown_back[2] * 0.13))
-        front_radius = max(6, int(crown_front[2] * 0.19))
-        top_radius = max(4, int(crown_top[2] * 0.12))
-        pygame.draw.circle(screen, (56, 120, 58), (int(crown_back[0]), int(crown_back[1])), back_radius)
-        pygame.draw.circle(screen, (74, 151, 72), (int(crown_front[0]), int(crown_front[1])), front_radius)
-        pygame.draw.circle(screen, (102, 186, 93), (int(crown_top[0]), int(crown_top[1])), top_radius)
-        pygame.draw.circle(
-            screen,
-            (134, 206, 118),
-            (int(crown_front[0] - (front_radius * 0.35)), int(crown_front[1] - (front_radius * 0.35))),
-            max(3, int(front_radius * 0.56)),
-        )
-
+        lamp_color = (114, 244, 255) if idx % 2 == 0 else (188, 122, 255)
+        glow_radius = max(5, int(lamp[2] * 0.16))
+        glow = pygame.Surface((glow_radius * 6, glow_radius * 6), pygame.SRCALPHA)
+        center = glow.get_width() // 2
+        pygame.draw.circle(glow, (lamp_color[0], lamp_color[1], lamp_color[2], 90), (center, center), int(glow_radius * 1.9))
+        pygame.draw.circle(glow, (lamp_color[0], lamp_color[1], lamp_color[2], 56), (center, center), int(glow_radius * 2.5))
+        screen.blit(glow, (int(lamp[0] - center), int(lamp[1] - center)))
+        pygame.draw.circle(screen, lamp_color, (int(lamp[0]), int(lamp[1])), glow_radius)

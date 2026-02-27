@@ -9,9 +9,12 @@ from controllers.base_controller import BaseController, MovementState
 from controllers.hand_controller import HandController
 from controllers.pose_controller import PoseController
 from core.calibration_store import CalibrationStore
+from core.game_manager import GameManager as SessionGameManager
 from core.level import FPS, HEIGHT, WIDTH, Level
+from core.player_controller import PlayerController
 from core.player import Player
 from core.sound_manager import SoundManager
+from core.ui_manager import UIManager
 from screens.calibration_screen import CalibrationScreen
 from screens.home_screen import HomeScreen
 from screens.mode_select_screen import ModeSelectScreen
@@ -20,20 +23,24 @@ from screens.mode_select_screen import ModeSelectScreen
 class Game:
     def __init__(self, mode_config: ModeConfig | None = None) -> None:
         pygame.init()
-        pygame.display.set_caption("GesturePlay AI Runner")
+        pygame.display.set_caption("GesturePlay AI Runner | Neon Fitness")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
 
         self.font_title = pygame.font.SysFont("segoe ui", 60, bold=True)
-        self.font_prompt = pygame.font.SysFont("arial", 56, bold=True)
-        self.font_ui = pygame.font.SysFont("arial", 32, bold=True)
+        self.font_prompt = pygame.font.SysFont("segoe ui", 50, bold=True)
+        self.font_ui = pygame.font.SysFont("segoe ui", 30, bold=True)
         self.font_body = pygame.font.SysFont("segoe ui", 24)
+        self.font_small = pygame.font.SysFont("segoe ui", 19)
 
         self.home_screen = HomeScreen()
         self.mode_select_screen = ModeSelectScreen(MODE_ORDER)
         self.calibration_screen = CalibrationScreen()
         self.sound_manager = SoundManager(enabled=False)
         self.calibration_store = CalibrationStore()
+        self.session_manager = SessionGameManager(session_target_seconds=180.0)
+        self.player_controller = PlayerController()
+        self.ui_manager = UIManager()
 
         self.mode_config = mode_config or MODES[DEFAULT_MODE_KEY]
         if self.mode_config.key in MODE_ORDER:
@@ -51,12 +58,15 @@ class Game:
         self.current_speed = self.mode_config.speed
         self.next_prompt = "RUN"
         self.controls = MovementState()
+        self.instructions_text = "Keep shoulders, wrists, and hips visible."
         self.camera_surface: pygame.Surface | None = None
         self.calibration_samples: list[dict[str, float]] = []
         self.calibration_target_samples = 45
         self.calibration_progress = 0.0
         self.calibration_status = "Hold a neutral position..."
         self.calibration_has_saved_profile = False
+        self._frame_dt = 1.0 / FPS
+        self._mouse_clicked = False
 
         self.state = "home" if mode_config is None else "playing"
         self._state_handlers = {
@@ -75,7 +85,12 @@ class Game:
         try:
             while self.running:
                 dt = self.clock.tick(FPS) / 1000.0
+                self._frame_dt = dt
                 events = pygame.event.get()
+                self._mouse_clicked = any(
+                    event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                    for event in events
+                )
 
                 if any(event.type == pygame.QUIT for event in events):
                     self.running = False
@@ -85,6 +100,7 @@ class Game:
                 if handler is not None:
                     handler(dt, events)
 
+                self.ui_manager.update(dt)
                 self._draw_frame()
                 pygame.display.flip()
         finally:
@@ -109,6 +125,7 @@ class Game:
         self.next_prompt = "RUN"
         self.controls = MovementState(message=f"{self.mode_config.label} active.")
         self.camera_surface = None
+        self.session_manager.reset_session()
 
     def _build_controller(self, mode_config: ModeConfig, calibration_data: dict[str, float] | None = None) -> BaseController:
         if mode_config.control_type == "hand":
@@ -161,13 +178,20 @@ class Game:
 
     def _speed_for_time(self) -> float:
         profile_speed_bonus = {
-            "kids": 6.6,
-            "elderly": 2.6,
-            "disabled_leg": 4.3,
-            "disabled_hand": 4.0,
+            "kids": 4.0,
+            "elderly": 1.7,
+            "disabled_leg": 2.8,
+            "disabled_hand": 2.3,
+        }
+        profile_speed_ramp = {
+            "kids": 0.36,
+            "elderly": 0.24,
+            "disabled_leg": 0.30,
+            "disabled_hand": 0.27,
         }
         cap = profile_speed_bonus.get(self.mode_config.gesture_profile, 4.0)
-        return self.mode_config.speed + min(cap, self.elapsed * 0.45)
+        ramp = profile_speed_ramp.get(self.mode_config.gesture_profile, 0.30)
+        return self.mode_config.speed + min(cap, self.elapsed * ramp)
 
     def _update_home(self, dt: float, events: list[pygame.event.Event]) -> None:
         self.menu_level.world_scroll += dt * 3.0
@@ -180,6 +204,8 @@ class Game:
 
     def _update_mode_select(self, dt: float, events: list[pygame.event.Event]) -> None:
         self.menu_level.world_scroll += dt * 3.0
+        self.mode_select_screen.update(dt, events)
+
         for event in events:
             if event.type != pygame.KEYDOWN:
                 continue
@@ -196,8 +222,10 @@ class Game:
                 }
                 self.mode_select_screen.select_by_number(key_to_number[event.key])
             elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.ui_manager.trigger_fade()
                 self._start_calibration_session(self.mode_select_screen.current_mode_key())
             elif event.key == pygame.K_ESCAPE:
+                self.ui_manager.trigger_fade()
                 self.state = "home"
 
     def _update_calibration(self, _dt: float, events: list[pygame.event.Event]) -> None:
@@ -248,44 +276,47 @@ class Game:
         self.current_speed = self._speed_for_time()
         self.score += int(dt * (58 + (self.current_speed * 5.8)))
 
-        if keys[pygame.K_LEFT]:
-            self.player.set_lane(0)
-        elif keys[pygame.K_RIGHT]:
-            self.player.set_lane(2)
-        elif self.controls.tracked:
-            self.player.set_lane(self.controls.lane)
-
-        if self.controls.jump or keys[pygame.K_UP]:
-            self.player.jump()
+        player_input = self.player_controller.apply_input(self.player, self.controls, keys)
+        if player_input.jumped:
             self.sound_manager.play("jump")
 
-        duck_hold = self.controls.duck or keys[pygame.K_DOWN]
-        self.player.update(dt, duck_hold, self.current_speed)
+        self.player.update(dt, player_input.duck_hold, self.current_speed)
         self.level.update(dt, self.current_speed)
 
         if self.level.check_collision(self.player):
+            self.session_manager.reset_combo()
             self.best_score = max(self.best_score, self.score)
+            self.ui_manager.trigger_fade(120)
             self.state = "game_over"
             return
 
         coins_gained = self.level.collect_coins(self.player)
         if coins_gained:
             self.coin_count += coins_gained
-            self.score += coins_gained * 25
+            combo_bonus = max(0, (self.session_manager.metrics.combo + coins_gained) * 4)
+            self.score += (coins_gained * 25) + combo_bonus
 
         self.next_prompt = self.level.next_prompt()
+        self.session_manager.update_metrics(
+            dt=dt,
+            speed=self.current_speed,
+            tracked=self.controls.tracked,
+            lane_changed=player_input.lane_changed,
+            jumped=player_input.jumped,
+            duck_hold=player_input.duck_hold,
+            coins_gained=coins_gained,
+        )
 
     def _update_game_over(self, _dt: float, events: list[pygame.event.Event]) -> None:
         restart_requested = False
         menu_requested = False
 
         for event in events:
-            if event.type != pygame.KEYDOWN:
-                continue
-            if event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
-                restart_requested = True
-            elif event.key in (pygame.K_m, pygame.K_ESCAPE):
-                menu_requested = True
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
+                    restart_requested = True
+                elif event.key in (pygame.K_m, pygame.K_ESCAPE):
+                    menu_requested = True
 
         if self.controller is not None:
             self.controls, self.camera_surface = self.controller.get_movement()
@@ -293,10 +324,12 @@ class Game:
                 restart_requested = True
 
         if restart_requested:
+            self.ui_manager.trigger_fade()
             self._reset_run()
             self.state = "playing"
             return
         if menu_requested:
+            self.ui_manager.trigger_fade()
             self._release_controller()
             self.state = "mode_select"
 
@@ -330,64 +363,52 @@ class Game:
 
         pygame.draw.rect(
             self.screen,
-            (8, 24, 58),
+            (90, 244, 255),
             pygame.Rect(8, 8, WIDTH - 16, HEIGHT - 16),
-            4,
+            2,
             border_radius=24,
         )
 
     def _draw_hud(self) -> None:
-        prompt_panel = pygame.Rect((WIDTH // 2) - 170, 22, 340, 84)
-        pygame.draw.rect(self.screen, (27, 99, 222), prompt_panel, border_radius=20)
-        pygame.draw.rect(self.screen, (191, 225, 255), prompt_panel, 3, border_radius=20)
-        prompt_text = self.font_prompt.render(f"{self.next_prompt}!", True, (255, 255, 255))
-        self.screen.blit(prompt_text, prompt_text.get_rect(center=(prompt_panel.centerx, prompt_panel.centery + 2)))
-
-        score_panel = pygame.Rect(18, 18, 320, 66)
-        pygame.draw.rect(self.screen, (16, 36, 76), score_panel, border_radius=16)
-        score_text = self.font_ui.render(f"Score: {self.score}", True, (255, 255, 255))
-        self.screen.blit(score_text, (score_panel.x + 18, score_panel.y + 16))
-
-        coin_panel = pygame.Rect(WIDTH - 274, 18, 256, 66)
-        pygame.draw.rect(self.screen, (16, 36, 76), coin_panel, border_radius=16)
-        coin_text = self.font_ui.render(f"Coins: {self.coin_count}", True, (255, 255, 255))
-        self.screen.blit(coin_text, (coin_panel.x + 18, coin_panel.y + 16))
-
-        mode_panel = pygame.Rect(18, 96, 420, 52)
-        pygame.draw.rect(self.screen, (16, 36, 76), mode_panel, border_radius=12)
-        mode_text = self.font_body.render(f"Mode: {self.mode_config.label}", True, (221, 237, 255))
-        self.screen.blit(mode_text, (mode_panel.x + 12, mode_panel.y + 12))
-
-        if self.camera_surface is not None:
-            preview = pygame.transform.smoothscale(self.camera_surface, (250, 188))
-            preview_rect = preview.get_rect(topright=(WIDTH - 18, 96))
-            self.screen.blit(preview, preview_rect)
-            pygame.draw.rect(self.screen, (255, 255, 255), preview_rect, 2, border_radius=8)
-
-        state_text = self.font_ui.render(f"State: {self.player.state().upper()}", True, (238, 248, 255))
-        self.screen.blit(state_text, (22, HEIGHT - 98))
-
-        status_bar = pygame.Rect(20, HEIGHT - 54, WIDTH - 40, 34)
-        pygame.draw.rect(self.screen, (20, 33, 64), status_bar, border_radius=10)
-        status_text = self.font_body.render(self.controls.message, True, (225, 235, 255))
-        self.screen.blit(status_text, (status_bar.x + 12, status_bar.y + 6))
+        self.ui_manager.draw_hud(
+            screen=self.screen,
+            font_prompt=self.font_prompt,
+            font_ui=self.font_ui,
+            font_body=self.font_body,
+            font_small=self.font_small,
+            mode_label=self.mode_config.label,
+            score=self.score,
+            coin_count=self.coin_count,
+            next_prompt=self.next_prompt,
+            instruction=self.instructions_text,
+            status_message=self.controls.message,
+            metrics=self.session_manager.metrics,
+            timer_text=self.session_manager.formatted_timer(),
+            current_speed=self.current_speed,
+            camera_surface=self.camera_surface,
+        )
 
     def _draw_game_over_overlay(self) -> None:
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((8, 14, 32, 170))
-        self.screen.blit(overlay, (0, 0))
-
-        title = self.font_title.render("Game Over", True, (255, 255, 255))
-        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 122)))
-
-        stats = [
-            f"Mode: {self.mode_config.label}",
-            f"Score: {self.score}",
-            f"Coins: {self.coin_count}",
-            f"Best: {self.best_score}",
-            "Press R or jump gesture to restart",
-            "Press M or ESC for mode select",
-        ]
-        for index, text in enumerate(stats):
-            label = self.font_body.render(text, True, (232, 238, 255))
-            self.screen.blit(label, label.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 36 + (index * 42))))
+        action = self.ui_manager.draw_summary(
+            screen=self.screen,
+            dt=self._frame_dt,
+            mouse_pos=pygame.mouse.get_pos(),
+            click=self._mouse_clicked,
+            font_title=self.font_title,
+            font_ui=self.font_ui,
+            font_body=self.font_body,
+            mode_label=self.mode_config.label,
+            score=self.score,
+            best_score=self.best_score,
+            coin_count=self.coin_count,
+            metrics=self.session_manager.metrics,
+            timer_text=self.session_manager.formatted_timer(),
+        )
+        if action == "replay":
+            self.ui_manager.trigger_fade()
+            self._reset_run()
+            self.state = "playing"
+        elif action == "mode":
+            self.ui_manager.trigger_fade()
+            self._release_controller()
+            self.state = "mode_select"
