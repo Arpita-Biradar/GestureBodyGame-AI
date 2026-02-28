@@ -133,9 +133,20 @@ class UIManager:
 
         flash_boost = int(30 * self._stats_flash)
         title = font_title.render("Session Summary", True, (214 + flash_boost, 249, 255))
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 54)))
 
-        self._draw_trophy(screen, panel.x + 48, panel.y + 34)
+        trophy_x = panel.x + 48
+        trophy_y = panel.y + 34
+        self._draw_trophy(screen, trophy_x, trophy_y)
+
+        # Keep a safe horizontal gap between trophy art and title text.
+        title_rect = title.get_rect(center=(panel.centerx, panel.y + 54))
+        trophy_right = trophy_x + 108
+        min_title_left = trophy_right + 18
+        if title_rect.left < min_title_left:
+            title_rect.left = min_title_left
+        if title_rect.right > panel.right - 24:
+            title_rect.right = panel.right - 24
+        screen.blit(title, title_rect)
 
         lines = [
             f"Mode: {mode_label}",
@@ -153,18 +164,6 @@ class UIManager:
             safe_text = self._truncate_to_width(text, font_body, stats_width)
             label = font_body.render(safe_text, True, (228, 243, 255))
             screen.blit(label, (stats_x, stats_top + (idx * line_gap)))
-
-        stats_bottom = stats_top + (len(lines) * line_gap)
-        meter_label_y = stats_bottom + 8
-        meter_label = font_body.render("Movement Intensity", True, (208, 236, 255))
-        screen.blit(meter_label, (stats_x, meter_label_y))
-
-        meter_rect = pygame.Rect(stats_x, meter_label_y + font_body.get_height() + 8, stats_width, 18)
-        pygame.draw.rect(screen, (16, 36, 58), meter_rect, border_radius=9)
-        fill_w = int((meter_rect.width - 4) * max(0.0, min(1.0, metrics.intensity)))
-        meter_fill = pygame.Rect(meter_rect.x + 2, meter_rect.y + 2, fill_w, meter_rect.height - 4)
-        pygame.draw.rect(screen, (84, 244, 255), meter_fill, border_radius=8)
-        pygame.draw.rect(screen, (184, 235, 255), meter_rect, 1, border_radius=9)
 
         actions = [
             ("replay", "Replay", (84, 255, 136)),
