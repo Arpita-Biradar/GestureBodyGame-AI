@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -53,11 +54,15 @@ class HandController(BaseController):
         self.last_jump_time = 0.0
         self.left_hand_rest_y: float | None = None
         self.right_hand_rest_y: float | None = None
+        self.body_scale: float | None = None
+        self.arm_length: float | None = None
+        self.dominant_hand_score: float | None = None
 
         self.left_open_hold_frames = 0
         self.right_open_hold_frames = 0
         self.both_open_hold_frames = 0
         self.both_fist_hold_frames = 0
+        self.duck_hold_frames = 0
         self.jump_hold_frames = 0
         self.jump_armed = True
         self.apply_calibration(calibration_data)
@@ -88,13 +93,19 @@ class HandController(BaseController):
         only_right_open = right_open and left_hand is None
         both_open = left_open and right_open
         both_fist = left_fist and right_fist
+        low_duck_pose = self._is_low_duck_pose(left_hand, right_hand)
         jump_pose = self._is_jump_pose(left_hand, right_hand, pose_results)
 
         self.left_open_hold_frames = self._step_hold(self.left_open_hold_frames, only_left_open)
         self.right_open_hold_frames = self._step_hold(self.right_open_hold_frames, only_right_open)
         self.both_open_hold_frames = self._step_hold(self.both_open_hold_frames, both_open)
         self.both_fist_hold_frames = self._step_hold(self.both_fist_hold_frames, both_fist)
+        self.duck_hold_frames = self._step_hold(self.duck_hold_frames, both_fist or low_duck_pose)
         self.jump_hold_frames = self._step_hold(self.jump_hold_frames, jump_pose)
+
+        dominant = self._dominant_hand()
+        left_required = 1 if dominant == "left" else 2
+        right_required = 1 if dominant == "right" else 2
 
         if self.jump_hold_frames >= 2:
             state.tracked = True
@@ -104,16 +115,16 @@ class HandController(BaseController):
             if state.jump:
                 self.jump_armed = False
             state.message = "JUMP: both wrists above shoulder line."
-        elif self.both_fist_hold_frames >= 2:
+        elif self.duck_hold_frames >= 2:
             state.tracked = True
             state.lane = 1
             state.duck = True
-            state.message = "BOTH FIST detected: duck."
-        elif self.left_open_hold_frames >= 2:
+            state.message = "DUCK: both fists or lower both hands below rest height."
+        elif self.left_open_hold_frames >= left_required:
             state.tracked = True
             state.lane = 0
             state.message = "LEFT HAND OPEN detected: move left."
-        elif self.right_open_hold_frames >= 2:
+        elif self.right_open_hold_frames >= right_required:
             state.tracked = True
             state.lane = 2
             state.message = "RIGHT HAND OPEN detected: move right."
@@ -139,7 +150,7 @@ class HandController(BaseController):
         self.pose.close()
 
     def get_calibration_sample(self) -> tuple[dict[str, float] | None, str, pygame.Surface | None]:
-        frame, hand_results, _pose_results, status_message = self._read_tracking_results()
+        frame, hand_results, pose_results, status_message = self._read_tracking_results()
         if frame is None:
             return None, status_message, None
 
@@ -151,10 +162,11 @@ class HandController(BaseController):
         if left_hand is None or right_hand is None:
             return None, "Show both hands at comfortable neutral height.", preview
 
-        sample = {
+        sample: dict[str, float] = {
             "left_hand_rest_y": left_hand.wrist_y,
             "right_hand_rest_y": right_hand.wrist_y,
         }
+        sample.update(self._extract_pose_metrics(pose_results))
         return sample, "Hold your hands steady...", preview
 
     def apply_calibration(self, calibration_data: dict[str, float] | None) -> None:
@@ -166,6 +178,9 @@ class HandController(BaseController):
             self.left_hand_rest_y = min(0.82, max(0.36, float(left)))
         if right is not None:
             self.right_hand_rest_y = min(0.82, max(0.36, float(right)))
+        self.body_scale = calibration_data.get("pose_body_scale", self.body_scale)
+        self.arm_length = calibration_data.get("pose_arm_length", self.arm_length)
+        self.dominant_hand_score = calibration_data.get("pose_dominant_hand_score", self.dominant_hand_score)
 
     def _trigger_jump(self) -> bool:
         now = time.time()
@@ -268,7 +283,7 @@ class HandController(BaseController):
         if left_shoulder.visibility < 0.20 or right_shoulder.visibility < 0.20:
             return False
 
-        margin = 0.012
+        margin = 0.012 * self._body_scale_factor() * self._arm_scale_factor()
         return (
             left_hand.wrist_y < (left_shoulder.y - margin)
             and right_hand.wrist_y < (right_shoulder.y - margin)
@@ -279,6 +294,124 @@ class HandController(BaseController):
         if condition:
             return min(8, current + 1)
         return max(0, current - 1)
+
+    def _body_scale_factor(self) -> float:
+        if self.body_scale is None:
+            return 1.0
+        default_scale = 0.48
+        factor = self.body_scale / default_scale
+        return max(0.75, min(1.35, factor))
+
+    def _arm_scale_factor(self) -> float:
+        if self.arm_length is None:
+            return 1.0
+        default_arm = 0.27
+        factor = self.arm_length / default_arm
+        return max(0.80, min(1.25, factor))
+
+    def _dominant_hand(self) -> str | None:
+        if self.dominant_hand_score is None:
+            return None
+        if self.dominant_hand_score > 0.12:
+            return "right"
+        if self.dominant_hand_score < -0.12:
+            return "left"
+        return None
+
+    def _is_low_duck_pose(self, left_hand: HandGestureInfo | None, right_hand: HandGestureInfo | None) -> bool:
+        if self.mode_config.gesture_profile != "disabled_leg":
+            return False
+        if left_hand is None or right_hand is None:
+            return False
+        if self.left_hand_rest_y is None or self.right_hand_rest_y is None:
+            return False
+
+        margin = 0.08 * self._body_scale_factor() * self._arm_scale_factor()
+        left_threshold = min(0.98, self.left_hand_rest_y + margin)
+        right_threshold = min(0.98, self.right_hand_rest_y + margin)
+        return left_hand.wrist_y > left_threshold and right_hand.wrist_y > right_threshold
+
+    def _extract_pose_metrics(self, pose_results) -> dict[str, float]:
+        if pose_results is None or pose_results.pose_landmarks is None:
+            return {}
+
+        landmarks = pose_results.pose_landmarks.landmark
+        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value]
+        right_hip = landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value]
+
+        shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
+        hip_mid_y = (left_hip.y + right_hip.y) * 0.5
+        shoulder_width = abs(right_shoulder.x - left_shoulder.x)
+        torso_length = abs(shoulder_mid_y - hip_mid_y)
+
+        metrics: dict[str, float] = {}
+        if shoulder_width > 0:
+            metrics["pose_shoulder_width"] = shoulder_width
+        if torso_length > 0:
+            metrics["pose_torso_length"] = torso_length
+
+        nose = landmarks[self.mp_pose.PoseLandmark.NOSE.value]
+        left_ankle = landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value]
+        right_ankle = landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value]
+        ankle_y = None
+        ankle_threshold = 0.25
+        if left_ankle.visibility > ankle_threshold and right_ankle.visibility > ankle_threshold:
+            ankle_y = (left_ankle.y + right_ankle.y) * 0.5
+        elif left_ankle.visibility > ankle_threshold:
+            ankle_y = left_ankle.y
+        elif right_ankle.visibility > ankle_threshold:
+            ankle_y = right_ankle.y
+
+        body_height = None
+        if ankle_y is not None and nose.visibility > 0.30:
+            body_height = abs(ankle_y - nose.y)
+
+        body_scale = None
+        if body_height is not None and 0.25 < body_height < 0.95:
+            body_scale = body_height
+        elif torso_length > 0:
+            body_scale = torso_length * 2.4
+
+        if body_scale is not None:
+            if shoulder_width > 0:
+                body_scale = max(body_scale, shoulder_width * 2.0)
+            metrics["pose_body_scale"] = max(0.30, min(0.90, body_scale))
+
+        left_wrist = landmarks[self.mp_pose.PoseLandmark.LEFT_WRIST.value]
+        right_wrist = landmarks[self.mp_pose.PoseLandmark.RIGHT_WRIST.value]
+        wrist_threshold = 0.25
+        left_arm = None
+        right_arm = None
+        if left_wrist.visibility > wrist_threshold:
+            left_arm = self._distance(left_shoulder, left_wrist)
+        if right_wrist.visibility > wrist_threshold:
+            right_arm = self._distance(right_shoulder, right_wrist)
+
+        if left_arm is not None and right_arm is not None:
+            metrics["pose_arm_length"] = (left_arm + right_arm) * 0.5
+        elif left_arm is not None:
+            metrics["pose_arm_length"] = left_arm
+        elif right_arm is not None:
+            metrics["pose_arm_length"] = right_arm
+
+        left_vis = left_wrist.visibility if left_wrist.visibility > wrist_threshold else 0.0
+        right_vis = right_wrist.visibility if right_wrist.visibility > wrist_threshold else 0.0
+        if left_vis > 0.0 and right_vis > 0.0:
+            metrics["pose_dominant_hand_score"] = right_vis - left_vis
+        elif right_vis > 0.0:
+            metrics["pose_dominant_hand_score"] = 1.0
+        elif left_vis > 0.0:
+            metrics["pose_dominant_hand_score"] = -1.0
+
+        return metrics
+
+    @staticmethod
+    def _distance(a, b) -> float:
+        dx = a.x - b.x
+        dy = a.y - b.y
+        return math.sqrt((dx * dx) + (dy * dy))
 
     @staticmethod
     def _distance_sq(a, b) -> float:

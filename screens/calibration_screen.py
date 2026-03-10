@@ -4,10 +4,10 @@ import pygame
 
 
 CALIBRATION_HINTS = {
-    "kids": "Stand centered with hands relaxed. Keep body visible and still.",
-    "elderly": "Stand naturally and keep both hands visible near a comfortable rest position.",
-    "disabled_leg": "Show both hands at comfortable neutral height, elbows relaxed.",
-    "disabled_hand": "Stand upright with shoulders and hips visible, keep still briefly.",
+    "kids": "Stand centered, hands relaxed. Auto-calibrates height, arm length, dominant hand.",
+    "elderly": "Stand naturally with both hands visible. Auto-calibrates height and arm length.",
+    "disabled_leg": "Show both hands and shoulders, hold still. Auto-calibrates dominant hand.",
+    "disabled_hand": "Stand upright with shoulders and hips visible. Auto-calibrates height.",
 }
 
 
@@ -66,4 +66,3 @@ class CalibrationScreen:
         controls = "R: restart capture   S: skip   ESC: back to mode select"
         controls_text = font_body.render(controls, True, (220, 235, 255))
         screen.blit(controls_text, controls_text.get_rect(center=(center_x, center_y + 368)))
-

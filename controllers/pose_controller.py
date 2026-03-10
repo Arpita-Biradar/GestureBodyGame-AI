@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 
 import cv2
@@ -37,6 +38,9 @@ class PoseController(BaseController):
         self.baseline_shoulder_y: float | None = None
         self.baseline_left_wrist_y: float | None = None
         self.baseline_right_wrist_y: float | None = None
+        self.body_scale: float | None = None
+        self.arm_length: float | None = None
+        self.dominant_hand_score: float | None = None
         self.last_jump_time = 0.0
         self.smoothed_lane = 1.0
         self.elderly_jump_hold_frames = 0
@@ -119,6 +123,9 @@ class PoseController(BaseController):
         self.baseline_shoulder_y = calibration_data.get("pose_baseline_shoulder_y", self.baseline_shoulder_y)
         self.baseline_left_wrist_y = calibration_data.get("pose_baseline_left_wrist_y", self.baseline_left_wrist_y)
         self.baseline_right_wrist_y = calibration_data.get("pose_baseline_right_wrist_y", self.baseline_right_wrist_y)
+        self.body_scale = calibration_data.get("pose_body_scale", self.body_scale)
+        self.arm_length = calibration_data.get("pose_arm_length", self.arm_length)
+        self.dominant_hand_score = calibration_data.get("pose_dominant_hand_score", self.dominant_hand_score)
         smoothed_lane = calibration_data.get("smoothed_lane")
         if smoothed_lane is not None:
             self.smoothed_lane = float(smoothed_lane)
@@ -179,7 +186,10 @@ class PoseController(BaseController):
         shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
         shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
         hip_mid_x = (left_hip.x + right_hip.x) * 0.5
+        hip_mid_y = (left_hip.y + right_hip.y) * 0.5
         torso_mid_x = (shoulder_mid_x + hip_mid_x) * 0.5
+        shoulder_width = abs(right_shoulder.x - left_shoulder.x)
+        torso_length = abs(shoulder_mid_y - hip_mid_y)
         sample = {
             "pose_baseline_torso_x": torso_mid_x,
             "pose_baseline_shoulder_y": shoulder_mid_y,
@@ -188,6 +198,23 @@ class PoseController(BaseController):
         if left_wrist is not None and right_wrist is not None:
             sample["pose_baseline_left_wrist_y"] = left_wrist.y
             sample["pose_baseline_right_wrist_y"] = right_wrist.y
+
+        if shoulder_width > 0:
+            sample["pose_shoulder_width"] = shoulder_width
+        if torso_length > 0:
+            sample["pose_torso_length"] = torso_length
+
+        body_scale = self._estimate_body_scale(landmarks, shoulder_mid_y, hip_mid_y, shoulder_width, torso_length)
+        if body_scale is not None:
+            sample["pose_body_scale"] = body_scale
+
+        arm_length = self._estimate_arm_length(left_shoulder, right_shoulder, left_wrist, right_wrist)
+        if arm_length is not None:
+            sample["pose_arm_length"] = arm_length
+
+        dominant_score = self._estimate_dominant_hand_score(left_wrist, right_wrist)
+        if dominant_score is not None:
+            sample["pose_dominant_hand_score"] = dominant_score
         return sample
 
     def _visibility_ok(
@@ -197,6 +224,92 @@ class PoseController(BaseController):
         threshold: float = 0.45,
     ) -> bool:
         return all(landmarks[index].visibility > threshold for index in indices)
+
+    def _body_scale_factor(self) -> float:
+        if self.body_scale is None:
+            return 1.0
+        default_scale = 0.48
+        factor = self.body_scale / default_scale
+        return max(0.75, min(1.35, factor))
+
+    def _arm_scale_factor(self) -> float:
+        if self.arm_length is None:
+            return 1.0
+        default_arm = 0.27
+        factor = self.arm_length / default_arm
+        return max(0.80, min(1.25, factor))
+
+    def _estimate_body_scale(
+        self,
+        landmarks,
+        shoulder_mid_y: float,
+        hip_mid_y: float,
+        shoulder_width: float,
+        torso_length: float,
+    ) -> float | None:
+        nose = landmarks[self.pose_landmark.NOSE.value]
+        left_ankle = landmarks[self.pose_landmark.LEFT_ANKLE.value]
+        right_ankle = landmarks[self.pose_landmark.RIGHT_ANKLE.value]
+
+        ankle_y: float | None = None
+        ankle_threshold = 0.25
+        if left_ankle.visibility > ankle_threshold and right_ankle.visibility > ankle_threshold:
+            ankle_y = (left_ankle.y + right_ankle.y) * 0.5
+        elif left_ankle.visibility > ankle_threshold:
+            ankle_y = left_ankle.y
+        elif right_ankle.visibility > ankle_threshold:
+            ankle_y = right_ankle.y
+
+        body_height: float | None = None
+        if ankle_y is not None and nose.visibility > 0.30:
+            body_height = abs(ankle_y - nose.y)
+
+        body_scale: float | None = None
+        if body_height is not None and 0.25 < body_height < 0.95:
+            body_scale = body_height
+        elif torso_length > 0:
+            body_scale = torso_length * 2.4
+
+        if body_scale is None:
+            return None
+
+        if shoulder_width > 0:
+            body_scale = max(body_scale, shoulder_width * 2.0)
+        return max(0.30, min(0.90, body_scale))
+
+    def _estimate_arm_length(
+        self,
+        left_shoulder,
+        right_shoulder,
+        left_wrist,
+        right_wrist,
+    ) -> float | None:
+        left_arm = None
+        right_arm = None
+        if left_wrist is not None:
+            left_arm = self._distance(left_shoulder, left_wrist)
+        if right_wrist is not None:
+            right_arm = self._distance(right_shoulder, right_wrist)
+
+        if left_arm is not None and right_arm is not None:
+            return (left_arm + right_arm) * 0.5
+        return left_arm or right_arm
+
+    @staticmethod
+    def _estimate_dominant_hand_score(left_wrist, right_wrist) -> float | None:
+        if left_wrist is None and right_wrist is None:
+            return None
+        if left_wrist is not None and right_wrist is not None:
+            return right_wrist.visibility - left_wrist.visibility
+        if right_wrist is not None:
+            return 1.0
+        return -1.0
+
+    @staticmethod
+    def _distance(a, b) -> float:
+        dx = a.x - b.x
+        dy = a.y - b.y
+        return math.sqrt((dx * dx) + (dy * dy))
 
     def _smooth_lane(self, target_lane: int, smoothing: float | None = None) -> int:
         alpha = smoothing if smoothing is not None else self.mode_config.lane_smoothing
@@ -223,6 +336,8 @@ class PoseController(BaseController):
         right_hip = landmarks[self.pose_landmark.RIGHT_HIP.value]
 
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
+        scale = self._body_scale_factor()
+        arm_scale = self._arm_scale_factor()
         shoulder_width = abs(right_shoulder.x - left_shoulder.x)
         shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
         shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
@@ -248,23 +363,23 @@ class PoseController(BaseController):
             self.baseline_torso_x = (self.baseline_torso_x * 0.92) + (torso_mid_x * 0.08)
 
         # Jump is triggered by raising both hands well above shoulder line.
-        hand_raise_margin = 0.055 / sensitivity
+        hand_raise_margin = (0.055 / sensitivity) * scale * arm_scale
         jump_pose = (
             left_wrist.y < (left_shoulder.y - hand_raise_margin)
             and right_wrist.y < (right_shoulder.y - hand_raise_margin)
         )
         if self.baseline_left_wrist_y is not None and self.baseline_right_wrist_y is not None:
             jump_pose = jump_pose and (
-                left_wrist.y < (self.baseline_left_wrist_y - (0.13 / sensitivity))
-                and right_wrist.y < (self.baseline_right_wrist_y - (0.13 / sensitivity))
+                left_wrist.y < (self.baseline_left_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
+                and right_wrist.y < (self.baseline_right_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
             )
         jump = jump_pose and self._trigger_jump()
 
         # Duck is a slight forward bend / downward torso shift.
-        bend_margin = 0.078 / sensitivity
+        bend_margin = (0.078 / sensitivity) * scale
         down_pose = (
             nose.y > (shoulder_mid_y + bend_margin)
-            or shoulder_mid_y > (self.baseline_shoulder_y + (0.05 / sensitivity))
+            or shoulder_mid_y > (self.baseline_shoulder_y + ((0.05 / sensitivity) * scale))
         )
 
         if not down_pose:
@@ -289,6 +404,8 @@ class PoseController(BaseController):
         right_wrist = landmarks[self.pose_landmark.RIGHT_WRIST.value]
 
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
+        scale = self._body_scale_factor()
+        arm_scale = self._arm_scale_factor()
         shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
         shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
         shoulder_width = abs(right_shoulder.x - left_shoulder.x)
@@ -316,13 +433,13 @@ class PoseController(BaseController):
 
         # Require a stable multi-frame raise for jump to avoid sudden spikes.
         hands_above_head = (
-            left_wrist.y < (nose.y - (0.01 / sensitivity))
-            and right_wrist.y < (nose.y - (0.01 / sensitivity))
+            left_wrist.y < (nose.y - ((0.01 / sensitivity) * scale * arm_scale))
+            and right_wrist.y < (nose.y - ((0.01 / sensitivity) * scale * arm_scale))
         )
         if self.baseline_left_wrist_y is not None and self.baseline_right_wrist_y is not None:
             hands_above_head = hands_above_head and (
-                left_wrist.y < (self.baseline_left_wrist_y - (0.09 / sensitivity))
-                and right_wrist.y < (self.baseline_right_wrist_y - (0.09 / sensitivity))
+                left_wrist.y < (self.baseline_left_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
+                and right_wrist.y < (self.baseline_right_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
             )
         if hands_above_head:
             self.elderly_jump_hold_frames += 1
@@ -334,8 +451,8 @@ class PoseController(BaseController):
             self.elderly_jump_hold_frames = 0
 
         # Gentle forward bend/downward shoulder shift triggers duck.
-        forward_bend = nose.y > (shoulder_mid_y + (0.098 / sensitivity))
-        gentle_shoulder_drop = shoulder_mid_y > (self.baseline_shoulder_y + (0.038 / sensitivity))
+        forward_bend = nose.y > (shoulder_mid_y + ((0.098 / sensitivity) * scale))
+        gentle_shoulder_drop = shoulder_mid_y > (self.baseline_shoulder_y + ((0.038 / sensitivity) * scale))
         duck_pose = forward_bend or gentle_shoulder_drop
 
         self.duck_filter = (self.duck_filter * 0.82) + (0.18 if duck_pose else 0.0)
@@ -365,6 +482,7 @@ class PoseController(BaseController):
             return MovementState(message="Disabled Hand Mode: keep shoulders visible to control movement.")
 
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
+        scale = self._body_scale_factor()
         shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
         shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
         if hips_visible:
@@ -384,7 +502,7 @@ class PoseController(BaseController):
         tilt_norm = tilt / shoulder_width
         torso_lean = torso_mid_x - self.baseline_torso_x
         lateral_signal = torso_lean - (tilt_norm * 0.08)
-        lateral_threshold = 0.030 / sensitivity
+        lateral_threshold = (0.030 / sensitivity) * scale
         target_lane = 1
         if lateral_signal < -lateral_threshold:
             target_lane = 0
@@ -395,9 +513,9 @@ class PoseController(BaseController):
         # Vertical shoulder baseline movement maps to jump (up) and duck (down).
         upward_shift = self.baseline_shoulder_y - shoulder_mid_y
         downward_shift = shoulder_mid_y - self.baseline_shoulder_y
-        jump_threshold = 0.040 / sensitivity
+        jump_threshold = (0.040 / sensitivity) * scale
         jump_release_threshold = jump_threshold * 0.45
-        duck_threshold = 0.052 / sensitivity
+        duck_threshold = (0.052 / sensitivity) * scale
 
         jump_pose = upward_shift > jump_threshold
         if jump_pose and self.disabled_hand_jump_armed:

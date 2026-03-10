@@ -61,9 +61,9 @@ class Game:
         self.instructions_text = "Keep shoulders, wrists, and hips visible."
         self.camera_surface: pygame.Surface | None = None
         self.calibration_samples: list[dict[str, float]] = []
-        self.calibration_target_samples = 45
+        self.calibration_target_samples = int(FPS * 3.0)
         self.calibration_progress = 0.0
-        self.calibration_status = "Hold a neutral position..."
+        self.calibration_status = "Auto-calibrating height, arm length, dominant hand..."
         self.calibration_has_saved_profile = False
         self._frame_dt = 1.0 / FPS
         self._mouse_clicked = False
@@ -149,7 +149,7 @@ class Game:
     def _reset_calibration_capture(self) -> None:
         self.calibration_samples = []
         self.calibration_progress = 0.0
-        self.calibration_status = "Hold a neutral position..."
+        self.calibration_status = "Auto-calibrating height, arm length, dominant hand..."
         self.camera_surface = None
 
     def _finalize_calibration(self) -> None:
