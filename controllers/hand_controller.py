@@ -9,6 +9,7 @@ import mediapipe as mp
 import pygame
 
 from controllers.base_controller import BaseController, MovementState
+from core.signal_smoothing import OneEuroFilter
 from core.vision_preprocess import LightingNormalizer
 
 
@@ -52,6 +53,15 @@ class HandController(BaseController):
             min_tracking_confidence=0.40,
         )
         self.lighting = LightingNormalizer()
+        self._last_ts = time.time()
+        self._frame_dt = 1.0 / 30.0
+
+        self._f_left_wrist_x = OneEuroFilter()
+        self._f_left_wrist_y = OneEuroFilter()
+        self._f_right_wrist_x = OneEuroFilter()
+        self._f_right_wrist_y = OneEuroFilter()
+        self._f_left_shoulder_y = OneEuroFilter()
+        self._f_right_shoulder_y = OneEuroFilter()
 
         self.last_jump_time = 0.0
         self.left_hand_rest_y: float | None = None
@@ -80,11 +90,16 @@ class HandController(BaseController):
         frame, hand_results, pose_results, status_message = self._read_tracking_results()
         if frame is None:
             state.message = status_message
+            state.confidence_reason = status_message
             return state, None
 
         hands_by_side = self._extract_hands_by_screen_side(hand_results)
         left_hand = hands_by_side.get("left")
         right_hand = hands_by_side.get("right")
+
+        self._update_dt()
+        left_hand = self._smooth_hand(left_hand, "left")
+        right_hand = self._smooth_hand(right_hand, "right")
 
         left_open = left_hand is not None and left_hand.is_open
         right_open = right_hand is not None and right_hand.is_open
@@ -95,6 +110,7 @@ class HandController(BaseController):
         only_right_open = right_open and left_hand is None
         both_open = left_open and right_open
         both_fist = left_fist and right_fist
+        any_fist = left_fist or right_fist
         low_duck_pose = self._is_low_duck_pose(left_hand, right_hand)
         jump_pose = self._is_jump_pose(left_hand, right_hand, pose_results)
 
@@ -102,7 +118,15 @@ class HandController(BaseController):
         self.right_open_hold_frames = self._step_hold(self.right_open_hold_frames, only_right_open)
         self.both_open_hold_frames = self._step_hold(self.both_open_hold_frames, both_open)
         self.both_fist_hold_frames = self._step_hold(self.both_fist_hold_frames, both_fist)
-        self.duck_hold_frames = self._step_hold(self.duck_hold_frames, both_fist or low_duck_pose)
+        allow_single_fist_duck = (
+            self.mode_config.gesture_profile == "disabled_leg"
+            and any_fist
+            and not (left_open or right_open)
+        )
+        self.duck_hold_frames = self._step_hold(
+            self.duck_hold_frames,
+            both_fist or low_duck_pose or allow_single_fist_duck,
+        )
         self.jump_hold_frames = self._step_hold(self.jump_hold_frames, jump_pose)
 
         dominant = self._dominant_hand()
@@ -117,27 +141,52 @@ class HandController(BaseController):
             if state.jump:
                 self.jump_armed = False
             state.message = "JUMP: both wrists above shoulder line."
+            state.gesture = "JUMP"
+            state.confidence = self._jump_confidence(left_hand, right_hand, pose_results)
         elif self.duck_hold_frames >= 2:
             state.tracked = True
             state.lane = 1
             state.duck = True
             state.message = "DUCK: both fists or lower both hands below rest height."
+            state.gesture = "DUCK"
+            if both_fist:
+                state.confidence = min(self._fist_confidence(left_hand), self._fist_confidence(right_hand))
+            elif low_duck_pose:
+                state.confidence = self._low_duck_confidence(left_hand, right_hand)
+            else:
+                state.confidence = max(self._fist_confidence(left_hand), self._fist_confidence(right_hand))
         elif self.left_open_hold_frames >= left_required:
             state.tracked = True
             state.lane = 0
             state.message = "LEFT HAND OPEN detected: move left."
+            state.gesture = "LEFT"
+            state.confidence = self._open_confidence(left_hand)
         elif self.right_open_hold_frames >= right_required:
             state.tracked = True
             state.lane = 2
             state.message = "RIGHT HAND OPEN detected: move right."
+            state.gesture = "RIGHT"
+            state.confidence = self._open_confidence(right_hand)
         elif self.both_open_hold_frames >= 2:
             state.tracked = True
             state.lane = 1
             state.message = "BOTH HANDS OPEN detected: center lane."
+            state.gesture = "CENTER"
+            state.confidence = min(self._open_confidence(left_hand), self._open_confidence(right_hand))
         elif left_hand is not None or right_hand is not None:
             state.message = "Show open palm on left/right side. For jump, raise both wrists above shoulders."
+            state.confidence_reason = self._failure_reason(
+                left_hand,
+                right_hand,
+                left_open,
+                right_open,
+                left_fist,
+                right_fist,
+                pose_results,
+            )
         else:
             state.message = "Leg-Free: show one or both hands clearly in frame."
+            state.confidence_reason = "Hands not visible. Keep both hands in frame."
 
         if not jump_pose:
             self.jump_armed = True
@@ -157,8 +206,9 @@ class HandController(BaseController):
             return None, status_message, None
 
         hands = self._extract_hands_by_screen_side(hand_results)
-        left_hand = hands.get("left")
-        right_hand = hands.get("right")
+        self._update_dt()
+        left_hand = self._smooth_hand(hands.get("left"), "left")
+        right_hand = self._smooth_hand(hands.get("right"), "right")
 
         preview = self._to_pygame_surface(frame)
         if left_hand is None or right_hand is None:
@@ -264,7 +314,7 @@ class HandController(BaseController):
             extended_count += 1
 
         is_open = extended_count >= 3
-        is_fist = extended_count <= 1
+        is_fist = extended_count <= 2
 
         return HandGestureInfo(
             wrist_x=wrist.x,
@@ -286,10 +336,12 @@ class HandController(BaseController):
         if left_shoulder.visibility < 0.20 or right_shoulder.visibility < 0.20:
             return False
 
+        left_shoulder_y = self._smooth(self._f_left_shoulder_y, left_shoulder.y)
+        right_shoulder_y = self._smooth(self._f_right_shoulder_y, right_shoulder.y)
         margin = 0.012 * self._body_scale_factor() * self._arm_scale_factor()
         return (
-            left_hand.wrist_y < (left_shoulder.y - margin)
-            and right_hand.wrist_y < (right_shoulder.y - margin)
+            left_hand.wrist_y < (left_shoulder_y - margin)
+            and right_hand.wrist_y < (right_shoulder_y - margin)
         )
 
     @staticmethod
@@ -311,6 +363,102 @@ class HandController(BaseController):
         default_arm = 0.27
         factor = self.arm_length / default_arm
         return max(0.80, min(1.25, factor))
+
+    def _update_dt(self) -> None:
+        now = time.time()
+        dt = now - self._last_ts if self._last_ts else (1.0 / 30.0)
+        self._last_ts = now
+        self._frame_dt = max(1.0 / 120.0, min(1.0 / 10.0, dt))
+
+    def _smooth(self, filt: OneEuroFilter, value: float) -> float:
+        return filt.apply(value, self._frame_dt)
+
+    def _smooth_hand(self, hand: HandGestureInfo | None, side: str) -> HandGestureInfo | None:
+        if hand is None:
+            return None
+        if side == "left":
+            fx = self._f_left_wrist_x
+            fy = self._f_left_wrist_y
+        else:
+            fx = self._f_right_wrist_x
+            fy = self._f_right_wrist_y
+        return HandGestureInfo(
+            wrist_x=self._smooth(fx, hand.wrist_x),
+            wrist_y=self._smooth(fy, hand.wrist_y),
+            extended_count=hand.extended_count,
+            is_open=hand.is_open,
+            is_fist=hand.is_fist,
+        )
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+    def _open_confidence(self, hand: HandGestureInfo | None) -> float:
+        if hand is None:
+            return 0.0
+        return self._clamp01((hand.extended_count - 2) / 3.0)
+
+    def _fist_confidence(self, hand: HandGestureInfo | None) -> float:
+        if hand is None:
+            return 0.0
+        return self._clamp01((3 - hand.extended_count) / 3.0)
+
+    def _jump_confidence(
+        self,
+        left_hand: HandGestureInfo | None,
+        right_hand: HandGestureInfo | None,
+        pose_results,
+    ) -> float:
+        if left_hand is None or right_hand is None:
+            return 0.0
+        if pose_results is None or pose_results.pose_landmarks is None:
+            return 0.0
+
+        landmarks = pose_results.pose_landmarks.landmark
+        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        if left_shoulder.visibility < 0.20 or right_shoulder.visibility < 0.20:
+            return 0.0
+
+        left_shoulder_y = self._smooth(self._f_left_shoulder_y, left_shoulder.y)
+        right_shoulder_y = self._smooth(self._f_right_shoulder_y, right_shoulder.y)
+        margin = 0.012 * self._body_scale_factor() * self._arm_scale_factor()
+        left_delta = (left_shoulder_y - left_hand.wrist_y) - margin
+        right_delta = (right_shoulder_y - right_hand.wrist_y) - margin
+        score = min(left_delta, right_delta)
+        return self._clamp01(score / max(0.001, margin * 1.5))
+
+    def _low_duck_confidence(self, left_hand: HandGestureInfo | None, right_hand: HandGestureInfo | None) -> float:
+        if left_hand is None or right_hand is None:
+            return 0.0
+        if self.left_hand_rest_y is None or self.right_hand_rest_y is None:
+            return 0.0
+        margin = 0.08 * self._body_scale_factor() * self._arm_scale_factor()
+        left_delta = left_hand.wrist_y - (self.left_hand_rest_y + margin)
+        right_delta = right_hand.wrist_y - (self.right_hand_rest_y + margin)
+        score = min(left_delta, right_delta)
+        return self._clamp01(score / max(0.001, margin * 1.5))
+
+    def _failure_reason(
+        self,
+        left_hand: HandGestureInfo | None,
+        right_hand: HandGestureInfo | None,
+        left_open: bool,
+        right_open: bool,
+        left_fist: bool,
+        right_fist: bool,
+        pose_results,
+    ) -> str:
+        if left_hand is None and right_hand is None:
+            return "Hands not visible. Keep both hands in frame."
+        if left_hand is None or right_hand is None:
+            return "Show both hands for jump or duck."
+        if pose_results is None or pose_results.pose_landmarks is None:
+            return "Keep shoulders visible for jump."
+        if not (left_open or right_open or left_fist or right_fist):
+            return "Open palm to steer; fist or lower hands to duck."
+        return "Hold a clear gesture for two frames."
 
     def _dominant_hand(self) -> str | None:
         if self.dominant_hand_score is None:

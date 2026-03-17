@@ -15,6 +15,9 @@ class MovementState:
     duck: bool = False
     tracked: bool = False
     message: str = "No gesture detected. Keep your body visible."
+    gesture: str = "NONE"
+    confidence: float = 0.0
+    confidence_reason: str = ""
 
 
 class BaseController(ABC):

@@ -8,6 +8,7 @@ import mediapipe as mp
 import pygame
 
 from controllers.base_controller import BaseController, MovementState
+from core.signal_smoothing import OneEuroFilter
 from core.vision_preprocess import LightingNormalizer
 
 
@@ -35,6 +36,22 @@ class PoseController(BaseController):
         )
         self.pose_landmark = self.mp_pose.PoseLandmark
         self.lighting = LightingNormalizer()
+        self._last_ts = time.time()
+        self._frame_dt = 1.0 / 30.0
+
+        self._f_nose_y = OneEuroFilter()
+        self._f_left_shoulder_x = OneEuroFilter()
+        self._f_left_shoulder_y = OneEuroFilter()
+        self._f_right_shoulder_x = OneEuroFilter()
+        self._f_right_shoulder_y = OneEuroFilter()
+        self._f_left_wrist_x = OneEuroFilter()
+        self._f_left_wrist_y = OneEuroFilter()
+        self._f_right_wrist_x = OneEuroFilter()
+        self._f_right_wrist_y = OneEuroFilter()
+        self._f_left_hip_x = OneEuroFilter()
+        self._f_left_hip_y = OneEuroFilter()
+        self._f_right_hip_x = OneEuroFilter()
+        self._f_right_hip_y = OneEuroFilter()
 
         self.baseline_torso_x: float | None = None
         self.baseline_shoulder_y: float | None = None
@@ -80,17 +97,21 @@ class PoseController(BaseController):
         default_state = MovementState(
             message="No pose detected. Stand where shoulders and hips are visible.",
         )
+        default_state.confidence_reason = default_state.message
 
         frame, landmarks, pose_landmarks, default_message = self._read_pose_landmarks()
         if frame is None:
             default_state.message = default_message
+            default_state.confidence_reason = default_message
             return default_state, None
 
         if landmarks is None:
             default_state.message = default_message
+            default_state.confidence_reason = default_message
             camera_surface = self._to_pygame_surface(frame)
             return default_state, camera_surface
 
+        self._update_dt()
         handler = self._handlers.get(self.mode_config.gesture_profile, self._handle_kids_profile)
         movement_state = handler(landmarks)
 
@@ -228,6 +249,55 @@ class PoseController(BaseController):
     ) -> bool:
         return all(landmarks[index].visibility > threshold for index in indices)
 
+    def _update_dt(self) -> None:
+        now = time.time()
+        dt = now - self._last_ts if self._last_ts else (1.0 / 30.0)
+        self._last_ts = now
+        self._frame_dt = max(1.0 / 120.0, min(1.0 / 10.0, dt))
+
+    def _smooth(self, filt: OneEuroFilter, value: float) -> float:
+        return filt.apply(value, self._frame_dt)
+
+    def _smooth_xy(self, landmark, filt_x: OneEuroFilter, filt_y: OneEuroFilter) -> tuple[float, float]:
+        return self._smooth(filt_x, landmark.x), self._smooth(filt_y, landmark.y)
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+    def _lane_confidence(self, torso_delta: float, lean_threshold: float, lane: int) -> float:
+        if lean_threshold <= 0.0:
+            return 0.0
+        if lane == 1:
+            return self._clamp01(1.0 - (abs(torso_delta) / (lean_threshold * 1.2)))
+        return self._clamp01(abs(torso_delta) / (lean_threshold * 1.5))
+
+    def _jump_confidence(
+        self,
+        left_wrist_y: float,
+        right_wrist_y: float,
+        left_shoulder_y: float,
+        right_shoulder_y: float,
+        margin: float,
+    ) -> float:
+        left_delta = (left_shoulder_y - left_wrist_y) - margin
+        right_delta = (right_shoulder_y - right_wrist_y) - margin
+        score = min(left_delta, right_delta)
+        return self._clamp01(score / max(0.001, margin * 1.5))
+
+    def _duck_confidence(
+        self,
+        nose_y: float,
+        shoulder_mid_y: float,
+        bend_margin: float,
+        baseline_shoulder_y: float,
+        shoulder_drop_margin: float,
+    ) -> float:
+        down_by_nose = nose_y - (shoulder_mid_y + bend_margin)
+        down_by_shoulders = shoulder_mid_y - (baseline_shoulder_y + shoulder_drop_margin)
+        score = max(down_by_nose, down_by_shoulders)
+        return self._clamp01(score / max(0.001, bend_margin * 1.5))
+
     def _body_scale_factor(self) -> float:
         if self.body_scale is None:
             return 1.0
@@ -328,7 +398,12 @@ class PoseController(BaseController):
 
     def _handle_kids_profile(self, landmarks) -> MovementState:
         if not self._visibility_ok(landmarks, self._kids_required):
-            return MovementState(message="Kids Mode: keep nose, shoulders, wrists, and hips visible.")
+            return MovementState(
+                message="Kids Mode: keep nose, shoulders, wrists, and hips visible.",
+                gesture="NONE",
+                confidence=0.0,
+                confidence_reason="Pose not visible. Keep nose, shoulders, wrists, and hips in view.",
+            )
 
         nose = landmarks[self.pose_landmark.NOSE.value]
         left_shoulder = landmarks[self.pose_landmark.LEFT_SHOULDER.value]
@@ -338,13 +413,21 @@ class PoseController(BaseController):
         left_hip = landmarks[self.pose_landmark.LEFT_HIP.value]
         right_hip = landmarks[self.pose_landmark.RIGHT_HIP.value]
 
+        nose_y = self._smooth(self._f_nose_y, nose.y)
+        left_shoulder_x, left_shoulder_y = self._smooth_xy(left_shoulder, self._f_left_shoulder_x, self._f_left_shoulder_y)
+        right_shoulder_x, right_shoulder_y = self._smooth_xy(right_shoulder, self._f_right_shoulder_x, self._f_right_shoulder_y)
+        left_wrist_x, left_wrist_y = self._smooth_xy(left_wrist, self._f_left_wrist_x, self._f_left_wrist_y)
+        right_wrist_x, right_wrist_y = self._smooth_xy(right_wrist, self._f_right_wrist_x, self._f_right_wrist_y)
+        left_hip_x, left_hip_y = self._smooth_xy(left_hip, self._f_left_hip_x, self._f_left_hip_y)
+        right_hip_x, right_hip_y = self._smooth_xy(right_hip, self._f_right_hip_x, self._f_right_hip_y)
+
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
         scale = self._body_scale_factor()
         arm_scale = self._arm_scale_factor()
-        shoulder_width = abs(right_shoulder.x - left_shoulder.x)
-        shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
-        shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
-        hip_mid_x = (left_hip.x + right_hip.x) * 0.5
+        shoulder_width = abs(right_shoulder_x - left_shoulder_x)
+        shoulder_mid_x = (left_shoulder_x + right_shoulder_x) * 0.5
+        shoulder_mid_y = (left_shoulder_y + right_shoulder_y) * 0.5
+        hip_mid_x = (left_hip_x + right_hip_x) * 0.5
         torso_mid_x = (shoulder_mid_x + hip_mid_x) * 0.5
 
         if self.baseline_torso_x is None:
@@ -368,25 +451,55 @@ class PoseController(BaseController):
         # Jump is triggered by raising both hands well above shoulder line.
         hand_raise_margin = (0.055 / sensitivity) * scale * arm_scale
         jump_pose = (
-            left_wrist.y < (left_shoulder.y - hand_raise_margin)
-            and right_wrist.y < (right_shoulder.y - hand_raise_margin)
+            left_wrist_y < (left_shoulder_y - hand_raise_margin)
+            and right_wrist_y < (right_shoulder_y - hand_raise_margin)
         )
         if self.baseline_left_wrist_y is not None and self.baseline_right_wrist_y is not None:
             jump_pose = jump_pose and (
-                left_wrist.y < (self.baseline_left_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
-                and right_wrist.y < (self.baseline_right_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
+                left_wrist_y < (self.baseline_left_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
+                and right_wrist_y < (self.baseline_right_wrist_y - ((0.13 / sensitivity) * scale * arm_scale))
             )
         jump = jump_pose and self._trigger_jump()
 
         # Duck is a slight forward bend / downward torso shift.
         bend_margin = (0.078 / sensitivity) * scale
         down_pose = (
-            nose.y > (shoulder_mid_y + bend_margin)
+            nose_y > (shoulder_mid_y + bend_margin)
             or shoulder_mid_y > (self.baseline_shoulder_y + ((0.05 / sensitivity) * scale))
         )
 
         if not down_pose:
             self.baseline_shoulder_y = (self.baseline_shoulder_y * 0.96) + (shoulder_mid_y * 0.04)
+
+        lane_confidence = self._lane_confidence(torso_delta, lean_threshold, lane)
+        jump_confidence = self._jump_confidence(
+            left_wrist_y,
+            right_wrist_y,
+            left_shoulder_y,
+            right_shoulder_y,
+            hand_raise_margin,
+        )
+        duck_confidence = self._duck_confidence(
+            nose_y,
+            shoulder_mid_y,
+            bend_margin,
+            self.baseline_shoulder_y,
+            (0.05 / sensitivity) * scale,
+        )
+
+        gesture = "CENTER"
+        confidence = lane_confidence
+        if lane == 0:
+            gesture = "LEFT"
+        elif lane == 2:
+            gesture = "RIGHT"
+
+        if jump:
+            gesture = "JUMP"
+            confidence = jump_confidence
+        elif down_pose:
+            gesture = "DUCK"
+            confidence = duck_confidence
 
         return MovementState(
             lane=lane,
@@ -394,11 +507,18 @@ class PoseController(BaseController):
             duck=down_pose,
             tracked=True,
             message="Kids Mode: lean wide to move, both hands high to jump, bend forward to duck.",
+            gesture=gesture,
+            confidence=confidence,
         )
 
     def _handle_elderly_profile(self, landmarks) -> MovementState:
         if not self._visibility_ok(landmarks, self._elderly_required):
-            return MovementState(message="Elderly Mode: keep shoulders, wrists, and hips visible.")
+            return MovementState(
+                message="Elderly Mode: keep shoulders, wrists, and hips visible.",
+                gesture="NONE",
+                confidence=0.0,
+                confidence_reason="Pose not visible. Keep shoulders, wrists, and hips in view.",
+            )
 
         nose = landmarks[self.pose_landmark.NOSE.value]
         left_shoulder = landmarks[self.pose_landmark.LEFT_SHOULDER.value]
@@ -406,12 +526,18 @@ class PoseController(BaseController):
         left_wrist = landmarks[self.pose_landmark.LEFT_WRIST.value]
         right_wrist = landmarks[self.pose_landmark.RIGHT_WRIST.value]
 
+        nose_y = self._smooth(self._f_nose_y, nose.y)
+        left_shoulder_x, left_shoulder_y = self._smooth_xy(left_shoulder, self._f_left_shoulder_x, self._f_left_shoulder_y)
+        right_shoulder_x, right_shoulder_y = self._smooth_xy(right_shoulder, self._f_right_shoulder_x, self._f_right_shoulder_y)
+        left_wrist_x, left_wrist_y = self._smooth_xy(left_wrist, self._f_left_wrist_x, self._f_left_wrist_y)
+        right_wrist_x, right_wrist_y = self._smooth_xy(right_wrist, self._f_right_wrist_x, self._f_right_wrist_y)
+
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
         scale = self._body_scale_factor()
         arm_scale = self._arm_scale_factor()
-        shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
-        shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
-        shoulder_width = abs(right_shoulder.x - left_shoulder.x)
+        shoulder_mid_x = (left_shoulder_x + right_shoulder_x) * 0.5
+        shoulder_mid_y = (left_shoulder_y + right_shoulder_y) * 0.5
+        shoulder_width = abs(right_shoulder_x - left_shoulder_x)
 
         if self.baseline_shoulder_y is None:
             self.baseline_shoulder_y = shoulder_mid_y
@@ -419,12 +545,12 @@ class PoseController(BaseController):
         # Elderly mode maps calm two-hand side extensions to lane changes.
         side_threshold = max(0.05, shoulder_width * (0.56 / sensitivity))
         both_left = (
-            left_wrist.x < (shoulder_mid_x - side_threshold)
-            and right_wrist.x < (shoulder_mid_x - (side_threshold * 0.72))
+            left_wrist_x < (shoulder_mid_x - side_threshold)
+            and right_wrist_x < (shoulder_mid_x - (side_threshold * 0.72))
         )
         both_right = (
-            left_wrist.x > (shoulder_mid_x + (side_threshold * 0.72))
-            and right_wrist.x > (shoulder_mid_x + side_threshold)
+            left_wrist_x > (shoulder_mid_x + (side_threshold * 0.72))
+            and right_wrist_x > (shoulder_mid_x + side_threshold)
         )
 
         target_lane = 1
@@ -436,13 +562,13 @@ class PoseController(BaseController):
 
         # Require a stable multi-frame raise for jump to avoid sudden spikes.
         hands_above_head = (
-            left_wrist.y < (nose.y - ((0.01 / sensitivity) * scale * arm_scale))
-            and right_wrist.y < (nose.y - ((0.01 / sensitivity) * scale * arm_scale))
+            left_wrist_y < (nose_y - ((0.01 / sensitivity) * scale * arm_scale))
+            and right_wrist_y < (nose_y - ((0.01 / sensitivity) * scale * arm_scale))
         )
         if self.baseline_left_wrist_y is not None and self.baseline_right_wrist_y is not None:
             hands_above_head = hands_above_head and (
-                left_wrist.y < (self.baseline_left_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
-                and right_wrist.y < (self.baseline_right_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
+                left_wrist_y < (self.baseline_left_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
+                and right_wrist_y < (self.baseline_right_wrist_y - ((0.09 / sensitivity) * scale * arm_scale))
             )
         if hands_above_head:
             self.elderly_jump_hold_frames += 1
@@ -454,7 +580,7 @@ class PoseController(BaseController):
             self.elderly_jump_hold_frames = 0
 
         # Gentle forward bend/downward shoulder shift triggers duck.
-        forward_bend = nose.y > (shoulder_mid_y + ((0.098 / sensitivity) * scale))
+        forward_bend = nose_y > (shoulder_mid_y + ((0.098 / sensitivity) * scale))
         gentle_shoulder_drop = shoulder_mid_y > (self.baseline_shoulder_y + ((0.038 / sensitivity) * scale))
         duck_pose = forward_bend or gentle_shoulder_drop
 
@@ -464,12 +590,58 @@ class PoseController(BaseController):
         if not duck:
             self.baseline_shoulder_y = (self.baseline_shoulder_y * 0.98) + (shoulder_mid_y * 0.02)
 
+        left_margin = min(
+            (shoulder_mid_x - side_threshold) - left_wrist_x,
+            (shoulder_mid_x - (side_threshold * 0.72)) - right_wrist_x,
+        )
+        right_margin = min(
+            left_wrist_x - (shoulder_mid_x + (side_threshold * 0.72)),
+            right_wrist_x - (shoulder_mid_x + side_threshold),
+        )
+        if lane == 0:
+            lane_confidence = self._clamp01(left_margin / max(0.001, side_threshold * 0.8))
+        elif lane == 2:
+            lane_confidence = self._clamp01(right_margin / max(0.001, side_threshold * 0.8))
+        else:
+            center_disp = max(abs(left_wrist_x - shoulder_mid_x), abs(right_wrist_x - shoulder_mid_x))
+            lane_confidence = self._clamp01(1.0 - (center_disp / max(0.001, side_threshold * 1.2)))
+        jump_confidence = self._jump_confidence(
+            left_wrist_y,
+            right_wrist_y,
+            left_shoulder_y,
+            right_shoulder_y,
+            (0.01 / sensitivity) * scale * arm_scale,
+        )
+        duck_confidence = self._duck_confidence(
+            nose_y,
+            shoulder_mid_y,
+            (0.098 / sensitivity) * scale,
+            self.baseline_shoulder_y,
+            (0.038 / sensitivity) * scale,
+        )
+
+        gesture = "CENTER"
+        confidence = lane_confidence
+        if lane == 0:
+            gesture = "LEFT"
+        elif lane == 2:
+            gesture = "RIGHT"
+
+        if jump:
+            gesture = "JUMP"
+            confidence = jump_confidence
+        elif duck:
+            gesture = "DUCK"
+            confidence = duck_confidence
+
         return MovementState(
             lane=lane,
             jump=jump,
             duck=duck,
             tracked=True,
             message="Elderly Mode: both hands left/right to move, slow raise above head to jump.",
+            gesture=gesture,
+            confidence=confidence,
         )
 
     def _handle_disabled_hand_profile(self, landmarks) -> MovementState:
@@ -478,23 +650,33 @@ class PoseController(BaseController):
         left_hip = landmarks[self.pose_landmark.LEFT_HIP.value]
         right_hip = landmarks[self.pose_landmark.RIGHT_HIP.value]
 
+        left_shoulder_x, left_shoulder_y = self._smooth_xy(left_shoulder, self._f_left_shoulder_x, self._f_left_shoulder_y)
+        right_shoulder_x, right_shoulder_y = self._smooth_xy(right_shoulder, self._f_right_shoulder_x, self._f_right_shoulder_y)
+        left_hip_x, left_hip_y = self._smooth_xy(left_hip, self._f_left_hip_x, self._f_left_hip_y)
+        right_hip_x, right_hip_y = self._smooth_xy(right_hip, self._f_right_hip_x, self._f_right_hip_y)
+
         shoulders_visible = left_shoulder.visibility > 0.30 and right_shoulder.visibility > 0.30
         hips_visible = left_hip.visibility > 0.18 and right_hip.visibility > 0.18
         if not shoulders_visible:
             self.disabled_hand_jump_hold_frames = 0
-            return MovementState(message="Disabled Hand Mode: keep shoulders visible to control movement.")
+            return MovementState(
+                message="Disabled Hand Mode: keep shoulders visible to control movement.",
+                gesture="NONE",
+                confidence=0.0,
+                confidence_reason="Shoulders not visible. Keep upper body in view.",
+            )
 
         sensitivity = max(0.55, self.mode_config.movement_sensitivity)
         scale = self._body_scale_factor()
-        shoulder_mid_x = (left_shoulder.x + right_shoulder.x) * 0.5
-        shoulder_mid_y = (left_shoulder.y + right_shoulder.y) * 0.5
+        shoulder_mid_x = (left_shoulder_x + right_shoulder_x) * 0.5
+        shoulder_mid_y = (left_shoulder_y + right_shoulder_y) * 0.5
         if hips_visible:
-            hip_mid_x = (left_hip.x + right_hip.x) * 0.5
+            hip_mid_x = (left_hip_x + right_hip_x) * 0.5
             torso_mid_x = (shoulder_mid_x + hip_mid_x) * 0.5
         else:
             torso_mid_x = shoulder_mid_x
-        shoulder_width = max(0.08, abs(right_shoulder.x - left_shoulder.x))
-        tilt = left_shoulder.y - right_shoulder.y
+        shoulder_width = max(0.08, abs(right_shoulder_x - left_shoulder_x))
+        tilt = left_shoulder_y - right_shoulder_y
 
         if self.baseline_torso_x is None:
             self.baseline_torso_x = torso_mid_x
@@ -544,10 +726,33 @@ class PoseController(BaseController):
             self.baseline_shoulder_y = (self.baseline_shoulder_y * 0.95) + (shoulder_mid_y * 0.05)
             self.baseline_torso_x = (self.baseline_torso_x * 0.94) + (torso_mid_x * 0.06)
 
+        if lane == 1:
+            lane_confidence = self._clamp01(1.0 - (abs(lateral_signal) / max(0.001, lateral_threshold * 1.2)))
+        else:
+            lane_confidence = self._clamp01(abs(lateral_signal) / max(0.001, lateral_threshold * 1.5))
+        jump_confidence = self._clamp01((upward_shift - jump_threshold) / max(0.001, jump_threshold * 1.5))
+        duck_confidence = self._clamp01((downward_shift - duck_threshold) / max(0.001, duck_threshold * 1.5))
+
+        gesture = "CENTER"
+        confidence = lane_confidence
+        if lane == 0:
+            gesture = "LEFT"
+        elif lane == 2:
+            gesture = "RIGHT"
+
+        if jump:
+            gesture = "JUMP"
+            confidence = jump_confidence
+        elif duck:
+            gesture = "DUCK"
+            confidence = duck_confidence
+
         return MovementState(
             lane=lane,
             jump=jump,
             duck=duck,
             tracked=True,
             message="Disabled Hand Mode: lean torso/tilt shoulders to move, rise body to jump, small squat to duck.",
+            gesture=gesture,
+            confidence=confidence,
         )

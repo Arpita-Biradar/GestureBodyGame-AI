@@ -40,6 +40,9 @@ class UIManager:
         next_prompt: str,
         instruction: str,
         status_message: str,
+        gesture_label: str,
+        gesture_confidence: float,
+        failure_reason: str,
         metrics: SessionMetrics,
         timer_text: str,
         current_speed: float,
@@ -80,7 +83,7 @@ class UIManager:
         pygame.draw.rect(screen, (72, 244, 255), fill, border_radius=7)
         pygame.draw.rect(screen, (198, 239, 255), bar_bg, 1, border_radius=8)
 
-        bottom_panel = pygame.Rect(20, screen.get_height() - 118, screen.get_width() - 40, 98)
+        bottom_panel = pygame.Rect(20, screen.get_height() - 140, screen.get_width() - 40, 120)
         self._draw_glass_panel(screen, bottom_panel, (109, 92, 255), (8, 18, 36), 172, 18)
 
         mode_text = font_ui.render(mode_label, True, (178, 223, 255))
@@ -95,10 +98,22 @@ class UIManager:
         pygame.draw.rect(screen, (118, 84, 255), progress_fill, border_radius=6)
 
         instruction_text = font_body.render(instruction, True, (222, 238, 255))
-        screen.blit(instruction_text, (bottom_panel.x + 18, bottom_panel.y + 64))
+        screen.blit(instruction_text, (bottom_panel.x + 18, bottom_panel.y + 62))
 
-        status_text = font_small.render(status_message, True, (186, 229, 255))
-        screen.blit(status_text, (bottom_panel.x + 18, bottom_panel.y + 78))
+        status_line = failure_reason or status_message
+        status_line = self._truncate_to_width(status_line, font_small, bottom_panel.width - 36)
+        status_text = font_small.render(status_line, True, (186, 229, 255))
+        screen.blit(status_text, (bottom_panel.x + 18, bottom_panel.y + 82))
+
+        safe_label = gesture_label or "NONE"
+        conf_pct = int(max(0.0, min(1.0, gesture_confidence)) * 100)
+        gesture_line = self._truncate_to_width(
+            f"Gesture: {safe_label} ({conf_pct}%)",
+            font_small,
+            bottom_panel.width - 36,
+        )
+        gesture_text = font_small.render(gesture_line, True, (186, 229, 255))
+        screen.blit(gesture_text, (bottom_panel.x + 18, bottom_panel.y + 100))
 
         if camera_surface is not None:
             preview = pygame.transform.smoothscale(camera_surface, (220, 164))
