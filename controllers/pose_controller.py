@@ -8,6 +8,7 @@ import mediapipe as mp
 import pygame
 
 from controllers.base_controller import BaseController, MovementState
+from core.vision_preprocess import LightingNormalizer
 
 
 class PoseController(BaseController):
@@ -33,6 +34,7 @@ class PoseController(BaseController):
             min_tracking_confidence=0.5,
         )
         self.pose_landmark = self.mp_pose.PoseLandmark
+        self.lighting = LightingNormalizer()
 
         self.baseline_torso_x: float | None = None
         self.baseline_shoulder_y: float | None = None
@@ -147,6 +149,7 @@ class PoseController(BaseController):
             return None, None, None, "Camera frame unavailable. Keyboard fallback: left/right + up/down."
 
         frame = cv2.flip(frame, 1)
+        frame = self.lighting.apply(frame)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.pose.process(rgb)
         landmarks = results.pose_landmarks.landmark if results.pose_landmarks else None

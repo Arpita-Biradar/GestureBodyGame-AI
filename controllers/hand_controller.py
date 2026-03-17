@@ -9,6 +9,7 @@ import mediapipe as mp
 import pygame
 
 from controllers.base_controller import BaseController, MovementState
+from core.vision_preprocess import LightingNormalizer
 
 
 @dataclass(slots=True)
@@ -50,6 +51,7 @@ class HandController(BaseController):
             min_detection_confidence=0.40,
             min_tracking_confidence=0.40,
         )
+        self.lighting = LightingNormalizer()
 
         self.last_jump_time = 0.0
         self.left_hand_rest_y: float | None = None
@@ -198,6 +200,7 @@ class HandController(BaseController):
             return None, None, None, "Camera frame unavailable. Keyboard fallback: left/right + up/down."
 
         frame = cv2.flip(frame, 1)
+        frame = self.lighting.apply(frame)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         hand_results = self.hands.process(rgb)
         pose_results = self.pose.process(rgb)
