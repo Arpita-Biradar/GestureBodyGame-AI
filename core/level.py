@@ -48,8 +48,13 @@ class Obstacle:
     lane: int
     kind: str
     z: float
+    prev_z: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.prev_z = self.z
 
     def advance(self, distance: float) -> None:
+        self.prev_z = self.z
         self.z -= distance
 
     def draw(self, screen: pygame.Surface) -> None:
@@ -60,49 +65,54 @@ class Obstacle:
         sx, sy, scale = proj_ground
 
         if self.kind == "jump":
-            width = max(20, int(scale * 0.92))
-            height = max(16, int(scale * 0.46))
+            width = max(24, int(scale * 1.12))
+            height = max(18, int(scale * 0.62))
             rect = pygame.Rect(int(sx - (width * 0.5)), int(sy - height), width, height)
 
-            glow = pygame.Surface((rect.width + 24, rect.height + 24), pygame.SRCALPHA)
-            pygame.draw.rect(glow, (255, 114, 82, 80), glow.get_rect(), border_radius=10, width=3)
-            screen.blit(glow, (rect.x - 12, rect.y - 12))
+            glow = pygame.Surface((rect.width + 34, rect.height + 34), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (255, 130, 92, 110), glow.get_rect(), border_radius=12, width=4)
+            screen.blit(glow, (rect.x - 17, rect.y - 17))
 
-            pygame.draw.rect(screen, (250, 122, 84), rect, border_radius=9)
-            pygame.draw.rect(screen, (255, 232, 182), rect, 2, border_radius=9)
+            shadow = pygame.Rect(rect.x + 2, rect.bottom - max(6, height // 5), rect.width - 4, max(4, height // 6))
+            pygame.draw.rect(screen, (150, 52, 34), shadow, border_radius=5)
+
+            pygame.draw.rect(screen, (255, 132, 90), rect, border_radius=10)
+            pygame.draw.rect(screen, (255, 238, 198), rect, 2, border_radius=10)
             pygame.draw.rect(
                 screen,
-                (210, 78, 48),
-                pygame.Rect(rect.x + 3, rect.bottom - max(8, height // 3), rect.width - 6, max(4, height // 5)),
-                border_radius=4,
+                (232, 92, 58),
+                pygame.Rect(rect.x + 4, rect.y + 4, rect.width - 8, max(5, height // 4)),
+                border_radius=6,
             )
-            self._draw_marker(screen, int(sx), rect.y - max(9, int(scale * 0.18)), (255, 146, 94), scale)
+            self._draw_marker(screen, int(sx), rect.y - max(10, int(scale * 0.22)), (255, 164, 112), scale * 1.4)
         else:
             bar_y = project_world(x_world, 1.03, self.z)
             if bar_y is None:
                 return
             _, bar_sy, _ = bar_y
-            width = max(28, int(scale * 1.08))
-            height = max(10, int(scale * 0.18))
+            width = max(34, int(scale * 1.28))
+            height = max(12, int(scale * 0.26))
             rect = pygame.Rect(int(sx - (width * 0.5)), int(bar_sy - (height * 0.5)), width, height)
 
-            glow = pygame.Surface((rect.width + 28, rect.height + 28), pygame.SRCALPHA)
-            pygame.draw.rect(glow, (96, 228, 255, 92), glow.get_rect(), border_radius=10, width=3)
-            screen.blit(glow, (rect.x - 14, rect.y - 14))
+            glow = pygame.Surface((rect.width + 36, rect.height + 36), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (108, 238, 255, 120), glow.get_rect(), border_radius=12, width=4)
+            screen.blit(glow, (rect.x - 18, rect.y - 18))
 
-            pygame.draw.rect(screen, (92, 196, 255), rect, border_radius=6)
-            pygame.draw.rect(screen, (224, 246, 255), rect, 2, border_radius=6)
+            pygame.draw.rect(screen, (102, 208, 255), rect, border_radius=7)
+            pygame.draw.rect(screen, (232, 248, 255), rect, 2, border_radius=7)
+            highlight = pygame.Rect(rect.x + 4, rect.y + 3, rect.width - 8, max(3, height // 3))
+            pygame.draw.rect(screen, (182, 238, 255), highlight, border_radius=4)
 
             # Side posts make overhead bars easier to read at a glance.
-            post_h = max(12, int(scale * 0.40))
-            post_w = max(3, int(scale * 0.06))
+            post_h = max(14, int(scale * 0.52))
+            post_w = max(4, int(scale * 0.08))
             left_post = pygame.Rect(rect.left + 2, rect.bottom - 2, post_w, post_h)
             right_post = pygame.Rect(rect.right - post_w - 2, rect.bottom - 2, post_w, post_h)
-            pygame.draw.rect(screen, (78, 162, 236), left_post, border_radius=3)
-            pygame.draw.rect(screen, (78, 162, 236), right_post, border_radius=3)
-            pygame.draw.rect(screen, (198, 236, 255), left_post, 1, border_radius=3)
-            pygame.draw.rect(screen, (198, 236, 255), right_post, 1, border_radius=3)
-            self._draw_marker(screen, int(sx), rect.y - max(10, int(scale * 0.22)), (120, 236, 255), scale)
+            pygame.draw.rect(screen, (84, 176, 244), left_post, border_radius=4)
+            pygame.draw.rect(screen, (84, 176, 244), right_post, border_radius=4)
+            pygame.draw.rect(screen, (206, 242, 255), left_post, 1, border_radius=4)
+            pygame.draw.rect(screen, (206, 242, 255), right_post, 1, border_radius=4)
+            self._draw_marker(screen, int(sx), rect.y - max(12, int(scale * 0.26)), (140, 244, 255), scale * 1.4)
 
     @staticmethod
     def _draw_marker(
@@ -112,11 +122,11 @@ class Obstacle:
         color: tuple[int, int, int],
         scale: float,
     ) -> None:
-        marker_size = max(4, int(scale * 0.10))
+        marker_size = max(5, int(scale * 0.12))
         glow = pygame.Surface((marker_size * 6, marker_size * 6), pygame.SRCALPHA)
         c = glow.get_width() // 2
-        pygame.draw.circle(glow, (color[0], color[1], color[2], 88), (c, c), int(marker_size * 1.6))
-        pygame.draw.circle(glow, (color[0], color[1], color[2], 48), (c, c), int(marker_size * 2.3))
+        pygame.draw.circle(glow, (color[0], color[1], color[2], 110), (c, c), int(marker_size * 1.8))
+        pygame.draw.circle(glow, (color[0], color[1], color[2], 58), (c, c), int(marker_size * 2.6))
         screen.blit(glow, (x - c, y - c))
         pygame.draw.circle(screen, color, (x, y), marker_size)
 
@@ -208,12 +218,15 @@ class Level:
         )
 
     def hits_obstacle(self, player: Player, obstacle: Obstacle) -> bool:
-        if abs(obstacle.z - PLAYER_Z) > 0.44:
+        z_min = min(obstacle.z, obstacle.prev_z)
+        z_max = max(obstacle.z, obstacle.prev_z)
+        z_pad = 0.55
+        if z_max < PLAYER_Z - z_pad or z_min > PLAYER_Z + z_pad:
             return False
-        if abs(player.x - lane_x(obstacle.lane)) > 0.58:
+        if abs(player.x - lane_x(obstacle.lane)) > 0.62:
             return False
         if obstacle.kind == "jump":
-            return player.y < 0.57
+            return player.y < 0.60
         return not player.ducking
 
     def takes_coin(self, player: Player, coin: Coin) -> bool:

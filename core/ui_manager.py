@@ -15,6 +15,7 @@ class UIManager:
         self._summary_pop: dict[str, float] = {}
         self._fade_alpha = 0.0
         self._stats_flash = 0.0
+        self._show_stats_detail = False
 
     def trigger_fade(self, alpha: float = 180.0) -> None:
         self._fade_alpha = max(self._fade_alpha, alpha)
@@ -132,6 +133,7 @@ class UIManager:
         font_title: pygame.font.Font,
         font_ui: pygame.font.Font,
         font_body: pygame.font.Font,
+        font_small: pygame.font.Font,
         mode_label: str,
         score: int,
         best_score: int,
@@ -140,74 +142,145 @@ class UIManager:
         timer_text: str,
     ) -> str | None:
         overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        overlay.fill((5, 10, 30, 190))
+        overlay.fill((5, 10, 30, 220))
         screen.blit(overlay, (0, 0))
 
-        panel = pygame.Rect((screen.get_width() // 2) - 350, (screen.get_height() // 2) - 250, 700, 500)
+        panel_w = min(760, screen.get_width() - 120)
+        panel_h = min(520, screen.get_height() - 120)
+        panel = pygame.Rect(
+            (screen.get_width() - panel_w) // 2,
+            (screen.get_height() - panel_h) // 2,
+            panel_w,
+            panel_h,
+        )
         self._draw_glass_panel(screen, panel, (87, 238, 255), (10, 22, 42), 186, 24)
+
+        left_col_w = max(180, int(panel.width * 0.26))
+        right_col_x = panel.x + left_col_w + 24
+        right_col_w = panel.right - right_col_x - 24
 
         flash_boost = int(30 * self._stats_flash)
         title = font_title.render("Session Summary", True, (214 + flash_boost, 249, 255))
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.y + 54)))
+        title_rect = title.get_rect(midtop=(right_col_x + (right_col_w // 2), panel.y + 22))
+        screen.blit(title, title_rect)
 
-        self._draw_trophy(screen, panel.x + 48, panel.y + 34)
+        trophy_panel = pygame.Rect(panel.x + 22, panel.y + 22, left_col_w - 44, 176)
+        self._draw_glass_panel(screen, trophy_panel, (120, 226, 255), (8, 18, 34), 168, 16)
+        trophy_x = trophy_panel.centerx - 50
+        trophy_y = trophy_panel.y + 12
+        self._draw_trophy(screen, trophy_x, trophy_y)
 
-        lines = [
-            f"Mode: {mode_label}",
-            f"Score: {score}",
-            f"Best Score: {best_score}",
-            f"Coins Collected: {coin_count}",
-            f"Calories Burned: {metrics.calories:0.0f} kcal",
-            f"Session Time: {timer_text}",
-        ]
-        stats_x = panel.x + 164
-        stats_top = panel.y + 122
-        stats_width = panel.right - stats_x - 24
-        line_gap = font_body.get_height() + 4
+        divider_x = panel.x + left_col_w + 12
+        pygame.draw.line(
+            screen,
+            (96, 196, 255),
+            (divider_x, panel.y + 24),
+            (divider_x, panel.bottom - 124),
+            1,
+        )
+
+        buttons_y = panel.bottom - 104
+        hint_y = panel.bottom - 16
+        content_bottom = buttons_y - 18
+
+        if self._show_stats_detail:
+            lines = [
+                f"Mode: {mode_label}",
+                f"Score: {score}",
+                f"Best Score: {best_score}",
+                f"Combo: {metrics.combo}",
+                f"Intensity: {metrics.intensity * 100:0.0f}%",
+                f"Session Progress: {metrics.progress * 100:0.0f}%",
+            ]
+        else:
+            lines = [
+                f"Mode: {mode_label}",
+                f"Score: {score}",
+                f"Best Score: {best_score}",
+                f"Coins Collected: {coin_count}",
+                f"Calories Burned: {metrics.calories:0.0f} kcal",
+                f"Session Time: {timer_text}",
+            ]
+        stats_x = right_col_x
+        stats_top = title_rect.bottom + 16
+        stats_width = right_col_w
+        meter_height = 18
+        meter_label_h = font_body.get_height()
+        meter_block = meter_label_h + 8 + meter_height + 8
+        line_gap_default = font_body.get_height() + 8
+        available_for_lines = content_bottom - stats_top - meter_block
+        if available_for_lines <= 0:
+            line_gap = font_body.get_height() + 2
+        else:
+            max_gap = max(font_body.get_height() + 2, int(available_for_lines / max(1, len(lines))))
+            line_gap = min(line_gap_default, max_gap)
         for idx, text in enumerate(lines):
             safe_text = self._truncate_to_width(text, font_body, stats_width)
             label = font_body.render(safe_text, True, (228, 243, 255))
             screen.blit(label, (stats_x, stats_top + (idx * line_gap)))
 
         stats_bottom = stats_top + (len(lines) * line_gap)
-        meter_label_y = stats_bottom + 8
+        meter_label_y = stats_bottom + 6
         meter_label = font_body.render("Movement Intensity", True, (208, 236, 255))
-        screen.blit(meter_label, (stats_x, meter_label_y))
+        meter_x = stats_x
+        meter_w = stats_width
+        if meter_label_y + meter_block > content_bottom:
+            meter_label_y = content_bottom - meter_block
+        if meter_label_y <= stats_bottom + 2:
+            meter_x = trophy_panel.x
+            meter_w = trophy_panel.width
+            meter_label_y = trophy_panel.bottom + 18
+            if meter_label_y + meter_block > content_bottom:
+                meter_label_y = content_bottom - meter_block
 
-        meter_rect = pygame.Rect(stats_x, meter_label_y + font_body.get_height() + 8, stats_width, 18)
+        screen.blit(meter_label, (meter_x, meter_label_y))
+
+        meter_rect = pygame.Rect(meter_x, meter_label_y + meter_label_h + 8, meter_w, meter_height)
         pygame.draw.rect(screen, (16, 36, 58), meter_rect, border_radius=9)
         fill_w = int((meter_rect.width - 4) * max(0.0, min(1.0, metrics.intensity)))
         meter_fill = pygame.Rect(meter_rect.x + 2, meter_rect.y + 2, fill_w, meter_rect.height - 4)
         pygame.draw.rect(screen, (84, 244, 255), meter_fill, border_radius=8)
         pygame.draw.rect(screen, (184, 235, 255), meter_rect, 1, border_radius=9)
 
+        stats_label = "Hide Stats" if self._show_stats_detail else "View Stats"
         actions = [
             ("replay", "Replay", (84, 255, 136)),
             ("mode", "Change Mode", (88, 184, 255)),
-            ("stats", "View Stats", (202, 110, 255)),
+            ("stats", stats_label, (202, 110, 255)),
         ]
         clicked_action: str | None = None
+        button_w = 196
+        button_h = 48
+        button_gap = 16
+        total_buttons_w = (button_w * len(actions)) + (button_gap * (len(actions) - 1))
+        buttons_x = panel.centerx - (total_buttons_w // 2)
         for idx, (key, label, color) in enumerate(actions):
-            base = pygame.Rect(panel.x + 54 + (idx * 216), panel.bottom - 102, 196, 48)
+            base = pygame.Rect(
+                buttons_x + (idx * (button_w + button_gap)),
+                buttons_y,
+                button_w,
+                button_h,
+            )
             hovered = base.collidepoint(mouse_pos)
-            if click and hovered:
-                self._summary_pop[key] = 0.16
-                clicked_action = key
-                if key == "stats":
-                    self._stats_flash = 0.35
-
             pop = self._summary_pop.get(key, 0.0)
             hover_scale = 1.05 if hovered else 1.0
             pop_scale = 1.0 + (0.08 * math.sin((0.16 - pop) * 18.0)) if pop > 0.0 else 1.0
             scale = hover_scale * pop_scale
             button_rect = self._scaled_rect(base, scale)
+            pressed = click and button_rect.collidepoint(mouse_pos)
+            if pressed:
+                self._summary_pop[key] = 0.16
+                clicked_action = key
+                if key == "stats":
+                    self._stats_flash = 0.35
+                    self._show_stats_detail = not self._show_stats_detail
 
             self._draw_glass_panel(screen, button_rect, color, (12, 26, 44), 192, 12)
             text = font_ui.render(label, True, (237, 249, 255))
             screen.blit(text, text.get_rect(center=button_rect.center))
 
-        hint = font_body.render("Enter/R: replay   M/Esc: mode select   Click buttons", True, (194, 227, 255))
-        screen.blit(hint, hint.get_rect(center=(panel.centerx, panel.bottom - 16)))
+        hint = font_small.render("Enter/R: replay   M/Esc: mode select   Click buttons", True, (194, 227, 255))
+        screen.blit(hint, hint.get_rect(center=(panel.centerx, hint_y)))
 
         self._draw_fade(screen)
         return clicked_action

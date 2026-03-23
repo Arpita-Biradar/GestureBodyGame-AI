@@ -2,17 +2,17 @@
   "version": 1,
   "modes": {
     "kids": {
-      "pose_baseline_torso_x": 0.5684740521841579,
-      "pose_baseline_shoulder_y": 0.17530034201012717,
+      "pose_baseline_torso_x": 0.4187490400340822,
+      "pose_baseline_shoulder_y": 0.37723622363474635,
       "smoothed_lane": 1.0,
-      "pose_baseline_left_wrist_y": 0.38040545996692443,
-      "pose_baseline_right_wrist_y": 0.3912271002928416,
-      "pose_shoulder_width": 0.1320379144615597,
-      "pose_torso_length": 0.2990311480230755,
-      "pose_body_scale": 0.8534718232436312,
-      "pose_arm_length": 0.22266231360696137,
-      "pose_dominant_hand_score": -0.013940776056713528,
-      "updated_epoch": 1773759980.66139
+      "pose_baseline_left_wrist_y": 0.7889466219478183,
+      "pose_baseline_right_wrist_y": 0.7929471029175652,
+      "pose_shoulder_width": 0.2589806334839927,
+      "pose_torso_length": 0.4723704201479753,
+      "pose_body_scale": 0.8940639848841566,
+      "pose_arm_length": 0.4427795458224046,
+      "pose_dominant_hand_score": 0.043114539980888364,
+      "updated_epoch": 1774285154.308057
     },
     "elderly": {
       "pose_baseline_torso_x": 0.5615661198894183,
@@ -28,14 +28,14 @@
       "updated_epoch": 1773759909.46742
     },
     "disabled_leg": {
-      "left_hand_rest_y": 0.7097755732156293,
-      "right_hand_rest_y": 0.6934813466983007,
-      "pose_shoulder_width": 0.4202914290957981,
-      "pose_torso_length": 0.742620986368921,
+      "left_hand_rest_y": 0.6711142126384383,
+      "right_hand_rest_y": 0.6782228714011591,
+      "pose_shoulder_width": 0.39855924331479603,
+      "pose_torso_length": 0.7092162330945333,
       "pose_body_scale": 0.9000000000000004,
-      "pose_arm_length": 0.12353533074737066,
-      "pose_dominant_hand_score": -0.1304366370042165,
-      "updated_epoch": 1773760195.50001
+      "pose_arm_length": 0.17214054554384792,
+      "pose_dominant_hand_score": 0.04947387642330593,
+      "updated_epoch": 1774288094.767448
     },
     "disabled_hand": {
       "pose_baseline_torso_x": 0.57525420329637,

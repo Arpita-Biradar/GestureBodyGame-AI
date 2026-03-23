@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 import pygame
 
@@ -24,7 +25,16 @@ class Game:
     def __init__(self, mode_config: ModeConfig | None = None) -> None:
         pygame.init()
         pygame.display.set_caption("GesturePlay AI Runner | Neon Fitness")
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        display_info = pygame.display.Info()
+        max_w = max(800, display_info.current_w - 80)
+        max_h = max(450, display_info.current_h - 80)
+        initial_scale = min(max_w / WIDTH, max_h / HEIGHT, 1.0)
+        initial_size = (int(WIDTH * initial_scale), int(HEIGHT * initial_scale))
+        self.window = pygame.display.set_mode(initial_size, pygame.RESIZABLE)
+        self.screen = pygame.Surface((WIDTH, HEIGHT))
+        self._viewport = pygame.Rect(0, 0, initial_size[0], initial_size[1])
+        self._scale = 1.0
+        self._update_viewport(initial_size)
         self.clock = pygame.time.Clock()
 
         self.font_title = pygame.font.SysFont("segoe ui", 60, bold=True)
@@ -36,7 +46,8 @@ class Game:
         self.home_screen = HomeScreen()
         self.mode_select_screen = ModeSelectScreen(MODE_ORDER)
         self.calibration_screen = CalibrationScreen()
-        self.sound_manager = SoundManager(enabled=False)
+        self.sound_manager = SoundManager(enabled=True)
+        self._load_sounds()
         self.calibration_store = CalibrationStore()
         self.session_manager = SessionGameManager(session_target_seconds=180.0)
         self.player_controller = PlayerController()
@@ -95,6 +106,11 @@ class Game:
                 if any(event.type == pygame.QUIT for event in events):
                     self.running = False
                     continue
+                for event in events:
+                    if event.type == pygame.VIDEORESIZE:
+                        size = (max(640, event.w), max(360, event.h))
+                        self.window = pygame.display.set_mode(size, pygame.RESIZABLE)
+                        self._update_viewport(size)
 
                 handler = self._state_handlers.get(self.state)
                 if handler is not None:
@@ -102,10 +118,35 @@ class Game:
 
                 self.ui_manager.update(dt)
                 self._draw_frame()
+                self._present_frame()
                 pygame.display.flip()
         finally:
             self._release_controller()
             pygame.quit()
+
+    def _update_viewport(self, window_size: tuple[int, int]) -> None:
+        win_w, win_h = window_size
+        self._scale = max(0.1, min(win_w / WIDTH, win_h / HEIGHT))
+        scaled_w = int(WIDTH * self._scale)
+        scaled_h = int(HEIGHT * self._scale)
+        offset_x = (win_w - scaled_w) // 2
+        offset_y = (win_h - scaled_h) // 2
+        self._viewport = pygame.Rect(offset_x, offset_y, scaled_w, scaled_h)
+
+    def _present_frame(self) -> None:
+        if self._viewport.width <= 0 or self._viewport.height <= 0:
+            return
+        scaled = pygame.transform.smoothscale(self.screen, (self._viewport.width, self._viewport.height))
+        self.window.fill((6, 10, 22))
+        self.window.blit(scaled, self._viewport.topleft)
+
+    def _map_mouse_pos(self) -> tuple[tuple[int, int], bool]:
+        mx, my = pygame.mouse.get_pos()
+        if not self._viewport.collidepoint(mx, my) or self._scale <= 0:
+            return (-10000, -10000), False
+        x = int((mx - self._viewport.x) / self._scale)
+        y = int((my - self._viewport.y) / self._scale)
+        return (x, y), True
 
     def _activate_mode(self, mode_key: str) -> None:
         self.mode_config = get_mode_config(mode_key)
@@ -114,6 +155,11 @@ class Game:
         self.controller = self._build_controller(self.mode_config, calibration_data)
         self._reset_run()
         self.state = "playing"
+
+    def _load_sounds(self) -> None:
+        base_dir = Path(__file__).resolve().parent.parent / "assets" / "sfx"
+        self.sound_manager.load("jump", base_dir / "jump.wav")
+        self.sound_manager.load("hit", base_dir / "hit.wav")
 
     def _reset_run(self) -> None:
         self.player = Player()
@@ -286,6 +332,7 @@ class Game:
         if self.level.check_collision(self.player):
             self.session_manager.reset_combo()
             self.best_score = max(self.best_score, self.score)
+            self.sound_manager.play("hit")
             self.ui_manager.trigger_fade(120)
             self.state = "game_over"
             return
@@ -337,7 +384,8 @@ class Game:
         if self.state in ("playing", "game_over") and self.level is not None and self.player is not None:
             self.level.draw(self.screen)
             self.player.draw(self.screen)
-            self._draw_hud()
+            if self.state == "playing":
+                self._draw_hud()
             if self.state == "game_over":
                 self._draw_game_over_overlay()
         elif self.state == "calibration":
@@ -392,14 +440,16 @@ class Game:
         )
 
     def _draw_game_over_overlay(self) -> None:
+        mapped_mouse, inside = self._map_mouse_pos()
         action = self.ui_manager.draw_summary(
             screen=self.screen,
             dt=self._frame_dt,
-            mouse_pos=pygame.mouse.get_pos(),
-            click=self._mouse_clicked,
+            mouse_pos=mapped_mouse,
+            click=self._mouse_clicked and inside,
             font_title=self.font_title,
             font_ui=self.font_ui,
             font_body=self.font_body,
+            font_small=self.font_small,
             mode_label=self.mode_config.label,
             score=self.score,
             best_score=self.best_score,
