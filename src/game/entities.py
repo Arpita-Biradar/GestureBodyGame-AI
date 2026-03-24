@@ -208,21 +208,21 @@ class Player:
         if current_state == "duck":
             hip_y = 0.56
             shoulder_y = 0.96
-            head_y = 1.24
+            head_lift = 0.15
             stride_scale = 0.38
             arm_scale = 0.28
             body_tilt = 0.08
         elif current_state == "jump":
             hip_y = 0.84
             shoulder_y = 1.34
-            head_y = 1.68
+            head_lift = 0.18
             stride_scale = 0.34
             arm_scale = 0.72
             body_tilt = -0.04
         else:
             hip_y = 0.82
             shoulder_y = 1.36
-            head_y = 1.72
+            head_lift = 0.17
             stride_scale = 1.0
             arm_scale = 1.0
             body_tilt = 0.0
@@ -236,8 +236,8 @@ class Player:
         right_hip = joint(0.14, hip_y - bounce, -0.02 - twist)
         left_shoulder = joint(-0.22, shoulder_y - bounce + body_tilt, -0.02 - twist)
         right_shoulder = joint(0.22, shoulder_y - bounce + body_tilt, 0.02 + twist)
-        neck = joint(0.0, shoulder_y + 0.05 - bounce + body_tilt, -twist * 0.3)
-        head = joint(0.0, head_y - bounce + body_tilt, -twist * 0.25)
+        neck = joint(0.0, shoulder_y + 0.02 - bounce + body_tilt, -twist * 0.3)
+        head = joint(0.0, shoulder_y + head_lift - bounce + body_tilt, -twist * 0.25)
         chest_front = joint(0.0, ((hip_y + shoulder_y) * 0.5) - bounce, 0.0)
         chest_back = joint(0.0, ((hip_y + shoulder_y) * 0.5) - bounce, 0.24)
 
