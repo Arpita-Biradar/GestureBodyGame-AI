@@ -28,6 +28,9 @@ htmlcov/
 
 # Logs
 *.log
+ml_data/
+model_artifacts/
+config/gesture_ml.local.json
 
 # Editor/IDE files
 .vscode/

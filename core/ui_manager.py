@@ -287,12 +287,35 @@ class UIManager:
         hero = pygame.Rect(left_panel.x + 18, left_panel.y + 18, left_panel.width - 36, 146)
         self._draw_glass_panel(screen, hero, (255, 206, 92), (18, 18, 28), 182, 18)
         self._draw_trophy(screen, hero.x + 18, hero.y + 16)
-        hero_score = font_ui.render(f"Score {score}", True, (255, 249, 236))
-        hero_meta = font_body.render(f"Calories {metrics.calories:0.1f} kcal", True, (241, 230, 198))
-        hero_time = font_body.render(f"Time {timer_text}", True, (229, 221, 196))
-        screen.blit(hero_score, (hero.x + 120, hero.y + 34))
-        screen.blit(hero_meta, (hero.x + 120, hero.y + 78))
-        screen.blit(hero_time, (hero.x + 120, hero.y + 108))
+        hero_text_x = hero.x + 120
+        hero_text_w = hero.right - hero_text_x - 16
+        hero_gap = 6
+        hero_score = font_ui.render(
+            self._truncate_to_width(f"Score {score}", font_ui, hero_text_w),
+            True,
+            (255, 249, 236),
+        )
+        hero_meta = font_body.render(
+            self._truncate_to_width(f"Calories {metrics.calories:0.1f} kcal", font_body, hero_text_w),
+            True,
+            (241, 230, 198),
+        )
+        hero_time = font_body.render(
+            self._truncate_to_width(f"Time {timer_text}", font_body, hero_text_w),
+            True,
+            (229, 221, 196),
+        )
+        hero_block_h = hero_score.get_height() + hero_meta.get_height() + hero_time.get_height() + (hero_gap * 2)
+        hero_block_y = hero.centery - (hero_block_h // 2) - 2
+        screen.blit(hero_score, (hero_text_x, hero_block_y))
+        screen.blit(hero_meta, (hero_text_x, hero_block_y + hero_score.get_height() + hero_gap))
+        screen.blit(
+            hero_time,
+            (
+                hero_text_x,
+                hero_block_y + hero_score.get_height() + hero_meta.get_height() + (hero_gap * 2),
+            ),
+        )
 
         metric_rects = self._build_metric_grid(
             pygame.Rect(left_panel.x + 18, hero.bottom + 16, left_panel.width - 36, left_panel.bottom - hero.bottom - 30),

@@ -1,0 +1,19 @@
+{
+  "global": {
+    "enabled": false,
+    "override_gameplay": false,
+    "min_confidence": 0.8,
+    "sequence_length": 20,
+    "record_samples": false,
+    "record_interval_seconds": 0.4,
+    "record_dir": "ml_data"
+  },
+  "streams": {
+    "pose": {
+      "record_samples": false
+    },
+    "hand": {
+      "record_samples": false
+    }
+  }
+}

@@ -11,6 +11,12 @@ import pygame
 from controllers.base_controller import BaseController, MovementState
 from core.signal_smoothing import OneEuroFilter
 from core.vision_preprocess import LightingNormalizer
+from gesture_ml import (
+    GestureMLRuntime,
+    GestureSampleLogger,
+    apply_prediction_to_state,
+    extract_hand_motion_features,
+)
 
 
 @dataclass(slots=True)
@@ -77,6 +83,8 @@ class HandController(BaseController):
         self.duck_hold_frames = 0
         self.jump_hold_frames = 0
         self.jump_armed = True
+        self.ml_runtime = GestureMLRuntime.for_stream("hand")
+        self.ml_logger = GestureSampleLogger(self.ml_runtime.config)
         self.apply_calibration(calibration_data)
 
     def get_movement(self) -> tuple[MovementState, pygame.Surface | None]:
@@ -190,6 +198,29 @@ class HandController(BaseController):
 
         if not jump_pose:
             self.jump_armed = True
+
+        heuristic_state = state
+        features = extract_hand_motion_features(
+            left_hand=left_hand,
+            right_hand=right_hand,
+            pose_results=pose_results,
+            left_hand_rest_y=self.left_hand_rest_y,
+            right_hand_rest_y=self.right_hand_rest_y,
+        )
+        prediction = self.ml_runtime.predict(features)
+        self.ml_logger.maybe_record(
+            self.ml_runtime.latest_sequence(),
+            heuristic_state,
+            metadata={
+                "mode_key": self.mode_config.key,
+                "gesture_profile": self.mode_config.gesture_profile,
+            },
+        )
+        state = apply_prediction_to_state(
+            heuristic_state,
+            prediction,
+            override_gameplay=self.ml_runtime.config.override_gameplay,
+        )
 
         camera_surface = self._to_pygame_surface(frame)
         return state, camera_surface

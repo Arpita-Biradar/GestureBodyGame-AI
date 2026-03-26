@@ -10,6 +10,12 @@ import pygame
 from controllers.base_controller import BaseController, MovementState
 from core.signal_smoothing import OneEuroFilter
 from core.vision_preprocess import LightingNormalizer
+from gesture_ml import (
+    GestureMLRuntime,
+    GestureSampleLogger,
+    apply_prediction_to_state,
+    extract_pose_motion_features,
+)
 
 
 class PoseController(BaseController):
@@ -67,6 +73,8 @@ class PoseController(BaseController):
         self.disabled_hand_jump_hold_frames = 0
         self.disabled_hand_jump_armed = True
         self.disabled_hand_duck_filter = 0.0
+        self.ml_runtime = GestureMLRuntime.for_stream("pose")
+        self.ml_logger = GestureSampleLogger(self.ml_runtime.config)
 
         self._handlers = {
             "kids": self._handle_kids_profile,
@@ -113,7 +121,22 @@ class PoseController(BaseController):
 
         self._update_dt()
         handler = self._handlers.get(self.mode_config.gesture_profile, self._handle_kids_profile)
-        movement_state = handler(landmarks)
+        heuristic_state = handler(landmarks)
+        features = extract_pose_motion_features(landmarks)
+        prediction = self.ml_runtime.predict(features)
+        self.ml_logger.maybe_record(
+            self.ml_runtime.latest_sequence(),
+            heuristic_state,
+            metadata={
+                "mode_key": self.mode_config.key,
+                "gesture_profile": self.mode_config.gesture_profile,
+            },
+        )
+        movement_state = apply_prediction_to_state(
+            heuristic_state,
+            prediction,
+            override_gameplay=self.ml_runtime.config.override_gameplay,
+        )
 
         self._draw_pose_landmarks(frame, pose_landmarks)
         camera_surface = self._to_pygame_surface(frame)
