@@ -15,27 +15,27 @@
       "updated_epoch": 1774285154.308057
     },
     "elderly": {
-      "pose_baseline_torso_x": 0.5615661198894183,
-      "pose_baseline_shoulder_y": 0.32998806999789343,
+      "pose_baseline_torso_x": 0.5318091135058138,
+      "pose_baseline_shoulder_y": 0.19223935355742772,
       "smoothed_lane": 1.0,
-      "pose_baseline_left_wrist_y": 0.632102652059661,
-      "pose_baseline_right_wrist_y": 0.6300895386272006,
-      "pose_shoulder_width": 0.14685396287176344,
-      "pose_torso_length": 0.313248303035895,
-      "pose_body_scale": 0.8028114677386152,
-      "pose_arm_length": 0.30365905923566305,
-      "pose_dominant_hand_score": -0.1173553572760688,
-      "updated_epoch": 1773759909.46742
+      "pose_baseline_left_wrist_y": 0.4178499049610562,
+      "pose_baseline_right_wrist_y": 0.43252063592274986,
+      "pose_shoulder_width": 0.126610537370046,
+      "pose_torso_length": 0.2643502771854401,
+      "pose_body_scale": 0.7548906060815271,
+      "pose_arm_length": 0.2345102244614563,
+      "pose_dominant_hand_score": -0.026626220014360217,
+      "updated_epoch": 1774542856.013673
     },
     "disabled_leg": {
-      "left_hand_rest_y": 0.8371193925920141,
-      "right_hand_rest_y": 0.826875137886084,
-      "pose_shoulder_width": 0.48885814597209293,
-      "pose_torso_length": 0.9010751244094637,
+      "left_hand_rest_y": 0.8393363658668308,
+      "right_hand_rest_y": 0.8442769582340203,
+      "pose_shoulder_width": 0.45472969445917344,
+      "pose_torso_length": 0.8073156575361887,
       "pose_body_scale": 0.9000000000000004,
-      "pose_arm_length": 0.05555712578093562,
-      "pose_dominant_hand_score": 0.058925360441207886,
-      "updated_epoch": 1774366976.744845
+      "pose_arm_length": 0.09292607234799173,
+      "pose_dominant_hand_score": -0.012088251113891602,
+      "updated_epoch": 1774542756.338284
     },
     "disabled_hand": {
       "pose_baseline_torso_x": 0.57525420329637,

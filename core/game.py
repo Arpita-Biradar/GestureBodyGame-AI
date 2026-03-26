@@ -86,6 +86,7 @@ class Game:
             "calibration": self._update_calibration,
             "playing": self._update_playing,
             "game_over": self._update_game_over,
+            "stats": self._update_stats,
         }
 
         if self.state == "playing":
@@ -172,6 +173,7 @@ class Game:
         self.controls = MovementState(message=f"{self.mode_config.label} active.")
         self.camera_surface = None
         self.session_manager.reset_session()
+        self.ui_manager.reset_summary_view()
 
     def _build_controller(self, mode_config: ModeConfig, calibration_data: dict[str, float] | None = None) -> BaseController:
         if mode_config.control_type == "hand":
@@ -357,6 +359,7 @@ class Game:
     def _update_game_over(self, _dt: float, events: list[pygame.event.Event]) -> None:
         restart_requested = False
         menu_requested = False
+        stats_requested = False
 
         for event in events:
             if event.type == pygame.KEYDOWN:
@@ -364,6 +367,8 @@ class Game:
                     restart_requested = True
                 elif event.key in (pygame.K_m, pygame.K_ESCAPE):
                     menu_requested = True
+                elif event.key == pygame.K_v:
+                    stats_requested = True
 
         if self.controller is not None:
             self.controls, self.camera_surface = self.controller.get_movement()
@@ -379,15 +384,50 @@ class Game:
             self.ui_manager.trigger_fade()
             self._release_controller()
             self.state = "mode_select"
+            return
+        if stats_requested:
+            self.ui_manager.trigger_fade(96)
+            self.state = "stats"
+
+    def _update_stats(self, _dt: float, events: list[pygame.event.Event]) -> None:
+        replay_requested = False
+        menu_requested = False
+        back_requested = False
+
+        for event in events:
+            if event.type != pygame.KEYDOWN:
+                continue
+            if event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
+                replay_requested = True
+            elif event.key == pygame.K_m:
+                menu_requested = True
+            elif event.key in (pygame.K_ESCAPE, pygame.K_b, pygame.K_BACKSPACE):
+                back_requested = True
+
+        if replay_requested:
+            self.ui_manager.trigger_fade()
+            self._reset_run()
+            self.state = "playing"
+            return
+        if menu_requested:
+            self.ui_manager.trigger_fade()
+            self._release_controller()
+            self.state = "mode_select"
+            return
+        if back_requested:
+            self.ui_manager.trigger_fade(96)
+            self.state = "game_over"
 
     def _draw_frame(self) -> None:
-        if self.state in ("playing", "game_over") and self.level is not None and self.player is not None:
+        if self.state in ("playing", "game_over", "stats") and self.level is not None and self.player is not None:
             self.level.draw(self.screen)
             self.player.draw(self.screen)
             if self.state == "playing":
                 self._draw_hud()
             if self.state == "game_over":
                 self._draw_game_over_overlay()
+            if self.state == "stats":
+                self._draw_stats_overlay()
         elif self.state == "calibration":
             self.menu_level.draw(self.screen)
             self.calibration_screen.draw(
@@ -456,6 +496,8 @@ class Game:
             coin_count=self.coin_count,
             metrics=self.session_manager.metrics,
             timer_text=self.session_manager.formatted_timer(),
+            session_history=self.session_manager.history_points(),
+            session_target_seconds=self.session_manager.session_target_seconds,
         )
         if action == "replay":
             self.ui_manager.trigger_fade()
@@ -465,3 +507,38 @@ class Game:
             self.ui_manager.trigger_fade()
             self._release_controller()
             self.state = "mode_select"
+        elif action == "stats":
+            self.ui_manager.trigger_fade(96)
+            self.state = "stats"
+
+    def _draw_stats_overlay(self) -> None:
+        mapped_mouse, inside = self._map_mouse_pos()
+        action = self.ui_manager.draw_stats_page(
+            screen=self.screen,
+            dt=self._frame_dt,
+            mouse_pos=mapped_mouse,
+            click=self._mouse_clicked and inside,
+            font_title=self.font_title,
+            font_ui=self.font_ui,
+            font_body=self.font_body,
+            font_small=self.font_small,
+            mode_label=self.mode_config.label,
+            score=self.score,
+            best_score=self.best_score,
+            coin_count=self.coin_count,
+            metrics=self.session_manager.metrics,
+            timer_text=self.session_manager.formatted_timer(),
+            session_history=self.session_manager.history_points(),
+            session_target_seconds=self.session_manager.session_target_seconds,
+        )
+        if action == "replay":
+            self.ui_manager.trigger_fade()
+            self._reset_run()
+            self.state = "playing"
+        elif action == "mode":
+            self.ui_manager.trigger_fade()
+            self._release_controller()
+            self.state = "mode_select"
+        elif action == "back":
+            self.ui_manager.trigger_fade(96)
+            self.state = "game_over"
